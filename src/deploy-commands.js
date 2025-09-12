@@ -2,63 +2,112 @@ import 'dotenv/config';
 import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 
 const commands = [
-  new SlashCommandBuilder()
+    new SlashCommandBuilder()
     .setName('profile_set')
     .setDescription('Set your bio')
     .addStringOption(o => o.setName('bio').setDescription('Your bio (up to ~1000 chars)').setMaxLength(1000).setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('profile_view')
-    .setDescription('View a profile')
-    .addUserOption(o => o.setName('user').setDescription('User to view'))
-    .addBooleanOption(o => o.setName('ephemeral').setDescription('Show privately (default true)')),
+    new SlashCommandBuilder()
+    .setName('profile_image')
+    .setDescription('Set or update your profile image')
+    .addAttachmentOption(o => o.setName('image').setDescription('Your profile image').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('profile_addtag')
-    .setDescription('Add a tag to your profile')
-    .addStringOption(o => o.setName('tag').setDescription('Tag to add').setAutocomplete(true).setRequired(true)),
+    new SlashCommandBuilder()
+    .setName('profile_showp')
+    .setDescription('Show a profile privately')
+    .addUserOption(o => o.setName('user').setDescription('User to view')),
 
-  new SlashCommandBuilder()
-    .setName('profile_removetag')
-    .setDescription('Remove a tag from your profile')
-    .addStringOption(o => o.setName('tag').setDescription('Tag to remove').setAutocomplete(true).setRequired(true)),
+    new SlashCommandBuilder()
+    .setName('profile_showv')
+    .setDescription('Show a profile publicly')
+    .addUserOption(o => o.setName('user').setDescription('User to view')),
 
-  new SlashCommandBuilder()
-    .setName('find')
-    .setDescription('Find users by tag')
+    new SlashCommandBuilder()
+    .setName('findp')
+    .setDescription('Find users by tag (private)')
     .addStringOption(o => o.setName('tag').setDescription('Tag to search').setAutocomplete(true).setRequired(true)),
 
-  new SlashCommandBuilder()
+    new SlashCommandBuilder()
+    .setName('findv')
+    .setDescription('Find users by tag (public)')
+    .addStringOption(o => o.setName('tag').setDescription('Tag to search').setAutocomplete(true).setRequired(true)),
+
+    new SlashCommandBuilder()
+    .setName('config_get')
+    .setDescription('Show bot config (mod-only)'),
+
+    new SlashCommandBuilder()
+    .setName('config_set')
+    .setDescription('Set config (mod-only)')
+    .addBooleanOption(o => o.setName('allow_ugc_tags').setDescription('Allow members to create new tags'))
+    .addIntegerOption(o => o.setName('max_tags_per_user').setDescription('Limit tags per user (e.g., 30)')),
+
+    new SlashCommandBuilder()
+    .setName('theme_set')
+    .setDescription('Set profile theme (mod-only)')
+    .addStringOption(o => o.setName('theme').setDescription('Profile theme').setRequired(true)
+        .addChoices({ name: '🌟 Default', value: 'default' }, { name: '🌸 Blossom', value: 'blossom' }, { name: '🌊 Ocean', value: 'ocean' }, { name: '🌇 Sunset', value: 'sunset' }, { name: '🌙 Midnight', value: 'midnight' })),
+
+    new SlashCommandBuilder()
+    .setName('theme_preview')
+    .setDescription('Preview a profile theme')
+    .addStringOption(o => o.setName('theme').setDescription('Theme to preview').setRequired(true)
+        .addChoices({ name: '🌟 Default', value: 'default' }, { name: '🌸 Blossom', value: 'blossom' }, { name: '🌊 Ocean', value: 'ocean' }, { name: '🌇 Sunset', value: 'sunset' }, { name: '🌙 Midnight', value: 'midnight' })),
+
+
+    new SlashCommandBuilder()
+    .setName('profile_addtag')
+    .setDescription('Add tag(s) to your profile')
+    .addStringOption(o => o.setName('tags').setDescription('Tags to add (separate multiple with commas)').setAutocomplete(true).setRequired(true)),
+
+    new SlashCommandBuilder()
+    .setName('profile_removetag')
+    .setDescription('Remove tag(s) from your profile')
+    .addStringOption(o => o.setName('tags').setDescription('Tags to remove (separate multiple with commas)').setAutocomplete(true).setRequired(true)),
+
+    new SlashCommandBuilder()
     .setName('tags_add')
     .setDescription('Add/update a dictionary tag (mod-only)')
     .addStringOption(o => o.setName('name').setDescription('slug e.g. pcb-design').setRequired(true))
-    .addStringOption(o => o.setName('display').setDescription('Display name e.g. PCB Design').setRequired(true)),
+    .addStringOption(o => o.setName('display').setDescription('Display name e.g. PCB Design').setRequired(true))
+    .addStringOption(o => o.setName('category').setDescription('Tag category').setRequired(false)
+        .addChoices({ name: '🏷️ General', value: 'general' }, { name: '⚡ Skills', value: 'skills' }, { name: '❤️ Interests', value: 'interests' }, { name: '🎯 Hobbies', value: 'hobbies' }, { name: '💼 Profession', value: 'profession' }, { name: '🎮 Gaming', value: 'gaming' }, { name: '🎨 Creative', value: 'creative' }, { name: '⚽ Sports', value: 'sports' }, { name: '🎵 Music', value: 'music' }, { name: '💻 Tech', value: 'tech' }, { name: '📚 Education', value: 'education' }, { name: '🌍 Languages', value: 'languages' })),
 
-  new SlashCommandBuilder()
+    new SlashCommandBuilder()
     .setName('tags_remove')
     .setDescription('Remove a dictionary tag (mod-only)')
     .addStringOption(o => o.setName('name').setDescription('slug to remove').setAutocomplete(true).setRequired(true)),
 
-  new SlashCommandBuilder()
+    new SlashCommandBuilder()
     .setName('tags_list')
-    .setDescription('List all dictionary tags')
+    .setDescription('List all dictionary tags'),
+
+    new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Get help with the bot')
+    .addStringOption(o => o.setName('category').setDescription('Help category').setRequired(false)
+        .addChoices({ name: '🚀 Getting Started', value: 'getting-started' }, { name: '👤 Profile Commands', value: 'profile' }, { name: '🏷️ Tag Commands', value: 'tags' }, { name: '🎨 Theme Commands', value: 'themes' }, { name: '⚙️ Admin Commands', value: 'admin' }, { name: '🔍 Search Commands', value: 'search' })),
+
+    new SlashCommandBuilder()
+    .setName('quickstart')
+    .setDescription('Quick setup guide for new users')
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 const mode = process.argv[2] || 'guild';
 
-(async () => {
-  try {
-    if (mode === 'guild') {
-      await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: commands });
-      console.log('Guild commands registered.');
-    } else {
-      await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-      console.log('Global commands registered.');
+(async() => {
+    try {
+        if (mode === 'guild') {
+            await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID), { body: commands });
+            console.log('Guild commands registered.');
+        } else {
+            await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+            console.log('Global commands registered.');
+        }
+    } catch (e) {
+        console.error(e);
+        process.exit(1);
     }
-  } catch (e) {
-    console.error(e);
-    process.exit(1);
-  }
 })();
