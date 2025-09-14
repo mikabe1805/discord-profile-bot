@@ -25,7 +25,11 @@ import {
     searchGuildTags,
     getUsersByTag,
     getGuildConfig,
-    setGuildConfig
+    setGuildConfig,
+    setUserTheme,
+    getUserTheme,
+    setGuildFeatureConfig,
+    getGuildFeatureConfig
 } from './db_firebase.js';
 
 const client = new Client({
@@ -359,6 +363,35 @@ client.on('interactionCreate', async(i) => {
       return;
     }
 
+    // -------- features_set ------------
+    if (name === 'features_set') {
+      if (!isMod(i)) return i.reply({ content: 'Mod-only.', flags: 64 });
+      const pingThreads = i.options.getBoolean('ping_threads');
+      const userCustomization = i.options.getBoolean('user_customization');
+      
+      await i.deferReply({ flags: 64 });
+      
+      if (pingThreads !== null) {
+        await setGuildFeatureConfig(i.guildId, 'ping_threads', pingThreads);
+      }
+      if (userCustomization !== null) {
+        await setGuildFeatureConfig(i.guildId, 'user_customization', userCustomization);
+      }
+      
+      const features = await getGuildFeatureConfig(i.guildId);
+      await i.editReply(`✅ Features updated!\nping_threads: \`${features.ping_threads}\`\nuser_customization: \`${features.user_customization}\``);
+      return;
+    }
+
+    // -------- features_get ------------
+    if (name === 'features_get') {
+      if (!isMod(i)) return i.reply({ content: 'Mod-only.', flags: 64 });
+      await i.deferReply({ flags: 64 });
+      const features = await getGuildFeatureConfig(i.guildId);
+      await i.editReply(`**Feature Settings:**\nping_threads: \`${features.ping_threads}\`\nuser_customization: \`${features.user_customization}\``);
+      return;
+    }
+
     // -------- theme_set ------------
     if (name === 'theme_set') {
       if (!isMod(i)) return i.reply({ content: 'Mod-only.', flags: 64 });
@@ -510,6 +543,146 @@ client.on('interactionCreate', async(i) => {
       return;
     }
 
+    // -------- ping ------------
+    if (name === 'ping') {
+      // Check if ping/thread feature is enabled
+      const featureConfig = await getGuildFeatureConfig(i.guildId);
+      if (!featureConfig.ping_threads) {
+        return i.reply({ content: '❌ Ping and thread creation is disabled by moderators.', flags: 64 });
+      }
+
+      const rawTags = i.options.getString('tags', true);
+      const message = i.options.getString('message') || 'Check this out!';
+      const threadName = i.options.getString('thread_name') || `Discussion: ${rawTags}`;
+
+      await i.deferReply();
+
+      // Parse tags and find users
+      const tagList = rawTags.split(',').map(t => normalizeTag(t.trim())).filter(t => t.length > 0);
+      if (tagList.length === 0) {
+        return i.editReply('❌ Please provide at least one valid tag.');
+      }
+
+      // Get users for each tag
+      const allUsers = new Set();
+      for (const tag of tagList) {
+        const users = await getUsersByTag(i.guildId, tag, 100);
+        users.forEach(u => allUsers.add(u.user_id));
+      }
+
+      if (allUsers.size === 0) {
+        return i.editReply(`❌ No users found with tags: ${tagList.map(t => `\`${t}\``).join(', ')}`);
+      }
+
+      // Create ping message
+      const userMentions = Array.from(allUsers).map(id => `<@${id}>`).join(' ');
+      const pingMessage = `🔔 **Ping for ${tagList.map(t => `\`${t}\``).join(', ')}**\n\n${message}\n\n${userMentions}`;
+
+      // Send ping message
+      await i.editReply(pingMessage);
+
+      // Create thread
+      try {
+        const thread = await i.channel.threads.create({
+          name: threadName,
+          autoArchiveDuration: 60, // 1 hour
+          reason: `Discussion thread for tags: ${tagList.join(', ')}`
+        });
+
+        // Send initial message in thread
+        const threadEmbed = new EmbedBuilder()
+          .setAuthor({ 
+            name: `${i.user.displayName || i.user.username}`, 
+            iconURL: i.user.displayAvatarURL({ dynamic: true, size: 256 })
+          })
+          .setTitle('💬 Discussion Thread')
+          .setDescription(`This thread was created for discussing: **${tagList.map(t => `\`${t}\``).join(', ')}**\n\nFeel free to chat and connect with others who share these interests!`)
+          .setColor('#5865F2')
+          .setFooter({ 
+            text: `Created by ${i.user.username}`,
+            iconURL: i.user.displayAvatarURL({ dynamic: true, size: 32 })
+          })
+          .setTimestamp();
+
+        await thread.send({ embeds: [threadEmbed] });
+        await i.followUp(`✅ Created discussion thread: ${thread}`);
+      } catch (error) {
+        console.log('Failed to create thread:', error);
+        await i.followUp('⚠️ Ping sent, but failed to create discussion thread.');
+      }
+      return;
+    }
+
+    // -------- profile_theme ------------
+    if (name === 'profile_theme') {
+      // Check if user customization is enabled
+      const featureConfig = await getGuildFeatureConfig(i.guildId);
+      if (!featureConfig.user_customization) {
+        return i.reply({ content: '❌ User profile customization is disabled by moderators.', flags: 64 });
+      }
+
+      const theme = i.options.getString('theme');
+      const primaryColor = i.options.getString('primary_color');
+      const secondaryColor = i.options.getString('secondary_color');
+      const title = i.options.getString('title');
+      const tagsEmoji = i.options.getString('tags_emoji');
+
+      await i.deferReply({ flags: 64 });
+
+      // Validate colors if provided
+      if (primaryColor && !/^#[0-9A-Fa-f]{6}$/.test(primaryColor)) {
+        return i.editReply('❌ Primary color must be a valid hex code (e.g., #FF5733)');
+      }
+      if (secondaryColor && !/^#[0-9A-Fa-f]{6}$/.test(secondaryColor)) {
+        return i.editReply('❌ Secondary color must be a valid hex code (e.g., #33FF57)');
+      }
+
+      // Build theme data
+      const themeData = {};
+      if (theme) themeData.theme = theme;
+      if (primaryColor) themeData.primary_color = primaryColor;
+      if (secondaryColor) themeData.secondary_color = secondaryColor;
+      if (title) themeData.title = title;
+      if (tagsEmoji) themeData.tags_emoji = tagsEmoji;
+
+      if (Object.keys(themeData).length === 0) {
+        return i.editReply('❌ Please provide at least one customization option.');
+      }
+
+      // Save user theme
+      await setUserTheme(i.guildId, i.user.id, themeData);
+
+      // Show preview
+      const embed = new EmbedBuilder()
+        .setAuthor({ 
+          name: `${i.user.displayName || i.user.username}`, 
+          iconURL: i.user.displayAvatarURL({ dynamic: true, size: 256 })
+        })
+        .setTitle('🎨 Profile Theme Updated!')
+        .setDescription('Your profile theme has been customized. Here\'s a preview:')
+        .setColor(primaryColor || '#5865F2')
+        .addFields(
+          {
+            name: 'Customizations Applied:',
+            value: Object.entries(themeData).map(([key, value]) => `• **${key.replace('_', ' ')}**: \`${value}\``).join('\n'),
+            inline: false
+          },
+          {
+            name: 'Preview:',
+            value: 'Use `/profile_showp` to see how your profile looks with the new theme!',
+            inline: false
+          }
+        )
+        .setFooter({ 
+          text: 'Profile Bot • Custom Theme',
+          iconURL: i.user.displayAvatarURL({ dynamic: true, size: 32 })
+        })
+        .setTimestamp();
+
+      await i.editReply({ embeds: [embed] });
+      return;
+    }
+
   } catch (err) {
     console.error('interaction error:', err);
     if (i.isRepliable()) {
@@ -606,17 +779,18 @@ async function renderProfileEmbed(guildId, user) {
   const prof = await getProfile(guildId, user.id);
   const tags = await listUserTags(guildId, user.id);
   const guildConfig = await getGuildConfig(guildId);
+  const userTheme = await getUserTheme(guildId, user.id);
   
-  // Generate colors based on server theme
-  const colors = generateThemeColors(guildConfig, user.id);
+  // Generate colors - user theme overrides guild theme
+  const colors = userTheme ? generateUserThemeColors(userTheme, user.id) : generateThemeColors(guildConfig, user.id);
   
   // Create tag display grouped by category with better visuals
   const tagDisplay = tags.length 
     ? formatTagsByCategory(tags)
     : '*No tags added yet*';
   
-  // Get theme-specific styling
-  const theme = getThemeStyle(guildConfig.profile_theme);
+  // Get theme-specific styling - user theme overrides guild theme
+  const theme = userTheme ? getUserThemeStyle(userTheme) : getThemeStyle(guildConfig.profile_theme);
   
   // Use custom profile image if available
   const profileImage = prof?.profile_image || null;
@@ -723,6 +897,39 @@ function getThemeStyle(theme) {
     }
   };
   return styles[theme] || styles.default;
+}
+
+function generateUserThemeColors(userTheme, userId) {
+  // User's custom colors take priority
+  if (userTheme.primary_color && userTheme.secondary_color) {
+    return {
+      primary: userTheme.primary_color,
+      secondary: userTheme.secondary_color
+    };
+  }
+  
+  // Fall back to theme-based colors
+  const baseTheme = userTheme.theme || 'default';
+  const themeColors = getThemeColors(baseTheme);
+  
+  // Override with user's custom colors if provided
+  return {
+    primary: userTheme.primary_color || themeColors.primary,
+    secondary: userTheme.secondary_color || themeColors.secondary
+  };
+}
+
+function getUserThemeStyle(userTheme) {
+  // User's custom styling takes priority
+  const baseTheme = userTheme.theme || 'default';
+  const baseStyle = getThemeStyle(baseTheme);
+  
+  return {
+    title: userTheme.title || baseStyle.title,
+    fields: {
+      tags: userTheme.tags_emoji ? `${userTheme.tags_emoji} Tags` : baseStyle.fields.tags
+    }
+  };
 }
 
 function formatTagsByCategory(tags) {

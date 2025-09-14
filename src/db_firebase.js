@@ -299,3 +299,36 @@ export async function getUsersByTag(guild_id, tag_slug, limit = 5000, offset = 0
 function tagSlugToDisplay(slug) {
     return slug.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+// User theme management
+export async function setUserTheme(guild_id, user_id, themeData) {
+    const userDoc = gref(guild_id).collection('user_themes').doc(user_id);
+    await userDoc.set({
+        ...themeData,
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+}
+
+export async function getUserTheme(guild_id, user_id) {
+    const userDoc = gref(guild_id).collection('user_themes').doc(user_id);
+    const snap = await userDoc.get();
+    return snap.exists ? snap.data() : null;
+}
+
+// Mod config for new features
+export async function setGuildFeatureConfig(guild_id, feature, enabled) {
+    const configDoc = gref(guild_id).collection('config').doc('features');
+    await configDoc.set({
+        [feature]: enabled,
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+}
+
+export async function getGuildFeatureConfig(guild_id) {
+    const configDoc = gref(guild_id).collection('config').doc('features');
+    const snap = await configDoc.get();
+    return snap.exists ? snap.data() : {
+        ping_threads: true,
+        user_customization: true
+    };
+}

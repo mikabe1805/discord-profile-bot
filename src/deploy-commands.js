@@ -90,7 +90,34 @@ const commands = [
 
     new SlashCommandBuilder()
     .setName('quickstart')
-    .setDescription('Quick setup guide for new users')
+    .setDescription('Quick setup guide for new users'),
+
+    new SlashCommandBuilder()
+    .setName('ping')
+    .setDescription('Ping users with specific tags and create a discussion thread')
+    .addStringOption(o => o.setName('tags').setDescription('Comma-separated tags to ping users for').setRequired(true).setAutocomplete(true))
+    .addStringOption(o => o.setName('message').setDescription('Message to include with the ping').setRequired(false).setMaxLength(500))
+    .addStringOption(o => o.setName('thread_name').setDescription('Name for the discussion thread').setRequired(false).setMaxLength(100)),
+
+    new SlashCommandBuilder()
+    .setName('profile_theme')
+    .setDescription('Customize your personal profile theme and colors')
+    .addStringOption(o => o.setName('theme').setDescription('Base theme to use').setRequired(false)
+        .addChoices({ name: '🌟 Default', value: 'default' }, { name: '🌸 Blossom', value: 'blossom' }, { name: '🌊 Ocean', value: 'ocean' }, { name: '🌇 Sunset', value: 'sunset' }, { name: '🌙 Midnight', value: 'midnight' }, { name: '👤 User-based', value: 'user-based' }))
+    .addStringOption(o => o.setName('primary_color').setDescription('Primary color (hex code, e.g., #FF5733)').setRequired(false))
+    .addStringOption(o => o.setName('secondary_color').setDescription('Secondary color (hex code, e.g., #33FF57)').setRequired(false))
+    .addStringOption(o => o.setName('title').setDescription('Custom profile title (e.g., "🌟 My Profile")').setRequired(false).setMaxLength(50))
+    .addStringOption(o => o.setName('tags_emoji').setDescription('Custom emoji for tags section').setRequired(false).setMaxLength(10)),
+
+    new SlashCommandBuilder()
+    .setName('features_set')
+    .setDescription('Configure bot features (moderator only)')
+    .addBooleanOption(o => o.setName('ping_threads').setDescription('Allow users to create ping threads').setRequired(false))
+    .addBooleanOption(o => o.setName('user_customization').setDescription('Allow users to customize their profiles').setRequired(false)),
+
+    new SlashCommandBuilder()
+    .setName('features_get')
+    .setDescription('View current feature settings (moderator only)')
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
