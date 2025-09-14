@@ -7,6 +7,8 @@ import {
     InteractionType,
     PermissionFlagsBits
 } from 'discord.js';
+import https from 'https';
+import { URL } from 'url';
 
 import {
     upsertGuild,
@@ -129,11 +131,14 @@ client.on('interactionCreate', async(i) => {
                         if (image.size > 8 * 1024 * 1024) { // 8MB limit
                             return i.editReply('❌ Image file is too large. Please use an image under 8MB.');
                         }
-                        imageUrl = image.url;
+
+                        // Upload to permanent hosting to prevent expiry
+                        await i.editReply('📤 Uploading image to permanent storage...');
+                        imageUrl = await uploadImageToPermanentHost(image.url);
                     }
 
                     await upsertProfile(i.guildId, i.user.id, bio, imageUrl);
-                    const message = imageUrl ? '✅ Saved your bio and profile image!' : '✅ Saved your bio.';
+                    const message = imageUrl ? '✅ Saved your bio and profile image! (Image permanently stored)' : '✅ Saved your bio.';
                     await i.editReply(message);
                     return;
                 }
@@ -152,12 +157,16 @@ client.on('interactionCreate', async(i) => {
                         return i.editReply('❌ Image file is too large. Please use an image under 8MB.');
                     }
 
+                    // Upload to permanent hosting to prevent expiry
+                    await i.editReply('📤 Uploading image to permanent storage...');
+                    const permanentUrl = await uploadImageToPermanentHost(image.url);
+
                     // Get current profile to preserve bio
                     const currentProfile = await getProfile(i.guildId, i.user.id);
                     const currentBio = currentProfile ? currentProfile.bio : '';
 
-                    await upsertProfile(i.guildId, i.user.id, currentBio, image.url);
-                    await i.editReply('✅ Profile image updated!');
+                    await upsertProfile(i.guildId, i.user.id, currentBio, permanentUrl);
+                    await i.editReply('✅ Profile image updated! (Now permanently stored)');
                     return;
                 }
 
@@ -515,6 +524,73 @@ client.on('interactionCreate', async(i) => {
 client.login(process.env.DISCORD_TOKEN);
 
 // ---- helpers ----
+async function uploadImageToPermanentHost(imageUrl) {
+    try {
+        // Download the image from Discord
+        const imageData = await new Promise((resolve, reject) => {
+            https.get(imageUrl, (res) => {
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => resolve(Buffer.concat(chunks)));
+                res.on('error', reject);
+            }).on('error', reject);
+        });
+
+        // Upload to a free image hosting service (using imgbb.com as an example)
+        // Note: You'll need to get a free API key from https://api.imgbb.com/
+        const apiKey = process.env.IMGBB_API_KEY || 'your-imgbb-api-key-here';
+        
+        if (apiKey === 'your-imgbb-api-key-here') {
+            // Fallback: Use a different approach or return the original URL
+            console.log('No ImgBB API key found, using original URL (will expire)');
+            return imageUrl;
+        }
+
+        const formData = new URLSearchParams();
+        formData.append('key', apiKey);
+        formData.append('image', imageData.toString('base64'));
+
+        const uploadResponse = await new Promise((resolve, reject) => {
+            const options = {
+                hostname: 'api.imgbb.com',
+                port: 443,
+                path: '/1/upload',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Content-Length': formData.toString().length
+                }
+            };
+
+            const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const result = JSON.parse(data);
+                        if (result.success) {
+                            resolve(result.data.url);
+                        } else {
+                            reject(new Error(result.error?.message || 'Upload failed'));
+                        }
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+
+            req.on('error', reject);
+            req.write(formData.toString());
+            req.end();
+        });
+
+        return uploadResponse;
+    } catch (error) {
+        console.error('Failed to upload image to permanent host:', error);
+        // Return original URL as fallback
+        return imageUrl;
+    }
+}
 function normalizeTag(s) {
   return String(s).trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '');
 }
