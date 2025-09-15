@@ -11,9 +11,12 @@ const __dirname = path.dirname(__filename);
 // Initialize SQL.js
 let SQL = null;
 let db = null;
+let isInitialized = false;
 
 // Initialize database
 async function initDatabase() {
+    if (isInitialized) return;
+
     try {
         SQL = await initSqlJs();
 
@@ -120,6 +123,7 @@ async function initDatabase() {
         // Save the database
         saveDatabase();
 
+        isInitialized = true;
         console.log('✅ SQLite database initialized successfully');
     } catch (error) {
         console.error('❌ Error initializing database:', error);
@@ -130,6 +134,7 @@ async function initDatabase() {
 // Save database to file
 function saveDatabase() {
     try {
+        if (!db) return;
         const data = db.export();
         const buffer = Buffer.from(data);
         const dbPath = path.join(__dirname, '..', 'data', 'bot.db');
@@ -142,7 +147,14 @@ function saveDatabase() {
 // Helper function to execute query and return results
 function executeQuery(query, params = []) {
     try {
+        if (!db) throw new Error('Database not initialized');
         const stmt = db.prepare(query);
+
+        // Bind parameters
+        if (params.length > 0) {
+            stmt.bind(params);
+        }
+
         const results = [];
 
         while (stmt.step()) {
@@ -160,7 +172,14 @@ function executeQuery(query, params = []) {
 // Helper function to execute query and return single result
 function executeQuerySingle(query, params = []) {
     try {
+        if (!db) throw new Error('Database not initialized');
         const stmt = db.prepare(query);
+
+        // Bind parameters
+        if (params.length > 0) {
+            stmt.bind(params);
+        }
+
         let result = null;
 
         if (stmt.step()) {
@@ -178,8 +197,15 @@ function executeQuerySingle(query, params = []) {
 // Helper function to execute query without returning results
 function executeQueryRun(query, params = []) {
     try {
+        if (!db) throw new Error('Database not initialized');
         const stmt = db.prepare(query);
-        stmt.run(params);
+
+        // Bind parameters
+        if (params.length > 0) {
+            stmt.bind(params);
+        }
+
+        stmt.step();
         stmt.free();
     } catch (error) {
         console.error('Query execution error:', error);
@@ -187,11 +213,9 @@ function executeQueryRun(query, params = []) {
     }
 }
 
-// Initialize database on import
-await initDatabase();
-
 // ---- Guild bootstrap ----
 export async function upsertGuild(guild_id) {
+    await initDatabase();
     try {
         executeQueryRun(`
             INSERT OR IGNORE INTO guilds (guild_id, created_at) 
@@ -206,6 +230,7 @@ export async function upsertGuild(guild_id) {
 
 // ---- Profiles ----
 export async function upsertProfile(guild_id, user_id, bio = '', profile_image = null) {
+    await initDatabase();
     try {
         executeQueryRun(`
             INSERT OR REPLACE INTO profiles (guild_id, user_id, bio, profile_image, updated_at)
@@ -219,6 +244,7 @@ export async function upsertProfile(guild_id, user_id, bio = '', profile_image =
 }
 
 export async function getProfile(guild_id, user_id) {
+    await initDatabase();
     try {
         const result = executeQuerySingle(`
             SELECT bio, profile_image, tags FROM profiles 
@@ -240,6 +266,7 @@ export async function getProfile(guild_id, user_id) {
 
 // ---- Guild config ----
 export async function getGuildConfig(guild_id) {
+    await initDatabase();
     try {
         const result = executeQuerySingle(`
             SELECT allow_ugc_tags, max_tags_per_user, profile_theme, custom_colors 
@@ -269,6 +296,7 @@ export async function getGuildConfig(guild_id) {
 }
 
 export async function setGuildConfig(guild_id, patch) {
+    await initDatabase();
     try {
         const updates = [];
         const values = [];
@@ -308,6 +336,7 @@ export async function setGuildConfig(guild_id, patch) {
 
 // ---- Tags (dictionary) ----
 export async function addGuildTag(guild_id, tag_slug, display_name, created_by, category = 'general') {
+    await initDatabase();
     try {
         executeQueryRun(`
             INSERT OR REPLACE INTO tags (guild_id, tag_slug, display_name, created_by, category, updated_at)
@@ -321,6 +350,7 @@ export async function addGuildTag(guild_id, tag_slug, display_name, created_by, 
 }
 
 export async function removeGuildTag(guild_id, tag_slug) {
+    await initDatabase();
     try {
         // Remove all members first
         executeQueryRun(`
@@ -341,6 +371,7 @@ export async function removeGuildTag(guild_id, tag_slug) {
 }
 
 export async function listGuildTags(guild_id) {
+    await initDatabase();
     try {
         const results = executeQuery(`
             SELECT tag_slug, display_name, category 
@@ -361,6 +392,7 @@ export async function listGuildTags(guild_id) {
 }
 
 export async function searchGuildTags(guild_id, qstr, limit = 25) {
+    await initDatabase();
     try {
         let query = `
             SELECT tag_slug, display_name, category 
@@ -392,6 +424,7 @@ export async function searchGuildTags(guild_id, qstr, limit = 25) {
 
 // ---- User tags (membership edges) ----
 export async function addUserTag(guild_id, user_id, tag_slug) {
+    await initDatabase();
     try {
         const cfg = await getGuildConfig(guild_id);
 
@@ -441,6 +474,7 @@ export async function addUserTag(guild_id, user_id, tag_slug) {
 }
 
 export async function addMultipleUserTags(guild_id, user_id, tag_slugs) {
+    await initDatabase();
     try {
         const cfg = await getGuildConfig(guild_id);
         const results = { success: [], failed: [] };
@@ -513,6 +547,7 @@ export async function addMultipleUserTags(guild_id, user_id, tag_slugs) {
 }
 
 export async function removeUserTag(guild_id, user_id, tag_slug) {
+    await initDatabase();
     try {
         // Remove from tag_members
         executeQueryRun(`
@@ -530,6 +565,7 @@ export async function removeUserTag(guild_id, user_id, tag_slug) {
 }
 
 export async function removeMultipleUserTags(guild_id, user_id, tag_slugs) {
+    await initDatabase();
     try {
         const results = { success: [], failed: [] };
 
@@ -576,6 +612,7 @@ export async function removeMultipleUserTags(guild_id, user_id, tag_slugs) {
 }
 
 export async function listUserTags(guild_id, user_id) {
+    await initDatabase();
     try {
         const results = executeQuery(`
             SELECT t.tag_slug, t.display_name, t.category 
@@ -597,6 +634,7 @@ export async function listUserTags(guild_id, user_id) {
 }
 
 export async function getUsersByTag(guild_id, tag_slug, limit = 5000, offset = 0) {
+    await initDatabase();
     try {
         const results = executeQuery(`
             SELECT user_id FROM tag_members 
@@ -614,6 +652,7 @@ export async function getUsersByTag(guild_id, tag_slug, limit = 5000, offset = 0
 
 // User theme management
 export async function setUserTheme(guild_id, user_id, themeData) {
+    await initDatabase();
     try {
         const updates = [];
         const values = [];
@@ -641,6 +680,7 @@ export async function setUserTheme(guild_id, user_id, themeData) {
 }
 
 export async function getUserTheme(guild_id, user_id) {
+    await initDatabase();
     try {
         const result = executeQuerySingle(`
             SELECT theme, primary_color, secondary_color, title, tags_emoji 
@@ -657,6 +697,7 @@ export async function getUserTheme(guild_id, user_id) {
 
 // Mod config for new features
 export async function setGuildFeatureConfig(guild_id, feature, enabled) {
+    await initDatabase();
     try {
         executeQueryRun(`
             INSERT OR REPLACE INTO feature_configs (guild_id, ${feature}, updated_at)
@@ -670,6 +711,7 @@ export async function setGuildFeatureConfig(guild_id, feature, enabled) {
 }
 
 export async function getGuildFeatureConfig(guild_id) {
+    await initDatabase();
     try {
         const result = executeQuerySingle(`
             SELECT ping_threads, user_customization 
@@ -689,6 +731,7 @@ export async function getGuildFeatureConfig(guild_id) {
 
 // Helper function to update profile tags array
 async function updateProfileTags(guild_id, user_id) {
+    await initDatabase();
     try {
         const tags = executeQuery(`
             SELECT tag_slug FROM tag_members 
@@ -710,6 +753,19 @@ async function updateProfileTags(guild_id, user_id) {
 
 function tagSlugToDisplay(slug) {
     return slug.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Debug function to check database contents
+export async function debugDatabase() {
+    await initDatabase();
+    try {
+        const results = executeQuery('SELECT * FROM profiles');
+        console.log('All profiles in database:', results);
+        return results;
+    } catch (error) {
+        console.error('Error debugging database:', error);
+        throw error;
+    }
 }
 
 // Graceful shutdown
