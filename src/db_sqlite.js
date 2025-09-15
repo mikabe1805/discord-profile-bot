@@ -139,17 +139,64 @@ function saveDatabase() {
     }
 }
 
+// Helper function to execute query and return results
+function executeQuery(query, params = []) {
+    try {
+        const stmt = db.prepare(query);
+        const results = [];
+
+        while (stmt.step()) {
+            results.push(stmt.getAsObject());
+        }
+
+        stmt.free();
+        return results;
+    } catch (error) {
+        console.error('Query execution error:', error);
+        throw error;
+    }
+}
+
+// Helper function to execute query and return single result
+function executeQuerySingle(query, params = []) {
+    try {
+        const stmt = db.prepare(query);
+        let result = null;
+
+        if (stmt.step()) {
+            result = stmt.getAsObject();
+        }
+
+        stmt.free();
+        return result;
+    } catch (error) {
+        console.error('Query execution error:', error);
+        throw error;
+    }
+}
+
+// Helper function to execute query without returning results
+function executeQueryRun(query, params = []) {
+    try {
+        const stmt = db.prepare(query);
+        stmt.run(params);
+        stmt.free();
+    } catch (error) {
+        console.error('Query execution error:', error);
+        throw error;
+    }
+}
+
 // Initialize database on import
 await initDatabase();
 
 // ---- Guild bootstrap ----
 export async function upsertGuild(guild_id) {
     try {
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR IGNORE INTO guilds (guild_id, created_at) 
             VALUES (?, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id]);
+        `, [guild_id]);
         saveDatabase();
     } catch (error) {
         console.error('Error upserting guild:', error);
@@ -160,11 +207,10 @@ export async function upsertGuild(guild_id) {
 // ---- Profiles ----
 export async function upsertProfile(guild_id, user_id, bio = '', profile_image = null) {
     try {
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR REPLACE INTO profiles (guild_id, user_id, bio, profile_image, updated_at)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id, user_id, bio, profile_image]);
+        `, [guild_id, user_id, bio, profile_image]);
         saveDatabase();
     } catch (error) {
         console.error('Error upserting profile:', error);
@@ -174,13 +220,12 @@ export async function upsertProfile(guild_id, user_id, bio = '', profile_image =
 
 export async function getProfile(guild_id, user_id) {
     try {
-        const stmt = db.prepare(`
+        const result = executeQuerySingle(`
             SELECT bio, profile_image, tags FROM profiles 
             WHERE guild_id = ? AND user_id = ?
-        `);
-        const result = stmt.getAsObject([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
-        if (!result || Object.keys(result).length === 0) return null;
+        if (!result) return null;
 
         return {
             bio: result.bio,
@@ -196,13 +241,12 @@ export async function getProfile(guild_id, user_id) {
 // ---- Guild config ----
 export async function getGuildConfig(guild_id) {
     try {
-        const stmt = db.prepare(`
+        const result = executeQuerySingle(`
             SELECT allow_ugc_tags, max_tags_per_user, profile_theme, custom_colors 
             FROM guilds WHERE guild_id = ?
-        `);
-        const result = stmt.getAsObject([guild_id]);
+        `, [guild_id]);
 
-        if (!result || Object.keys(result).length === 0) {
+        if (!result) {
             // Return defaults if guild doesn't exist
             return {
                 allow_ugc_tags: true,
@@ -251,11 +295,10 @@ export async function setGuildConfig(guild_id, patch) {
         updates.push('updated_at = CURRENT_TIMESTAMP');
         values.push(guild_id);
 
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR REPLACE INTO guilds (guild_id, ${Object.keys(patch).join(', ')}, updated_at)
             VALUES (?, ${Object.keys(patch).map(() => '?').join(', ')}, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id, ...Object.values(patch)]);
+        `, [guild_id, ...Object.values(patch)]);
         saveDatabase();
     } catch (error) {
         console.error('Error setting guild config:', error);
@@ -266,11 +309,10 @@ export async function setGuildConfig(guild_id, patch) {
 // ---- Tags (dictionary) ----
 export async function addGuildTag(guild_id, tag_slug, display_name, created_by, category = 'general') {
     try {
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR REPLACE INTO tags (guild_id, tag_slug, display_name, created_by, category, updated_at)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id, tag_slug, display_name, created_by, category]);
+        `, [guild_id, tag_slug, display_name, created_by, category]);
         saveDatabase();
     } catch (error) {
         console.error('Error adding guild tag:', error);
@@ -281,18 +323,16 @@ export async function addGuildTag(guild_id, tag_slug, display_name, created_by, 
 export async function removeGuildTag(guild_id, tag_slug) {
     try {
         // Remove all members first
-        const deleteMembers = db.prepare(`
+        executeQueryRun(`
             DELETE FROM tag_members 
             WHERE guild_id = ? AND tag_slug = ?
-        `);
-        deleteMembers.run([guild_id, tag_slug]);
+        `, [guild_id, tag_slug]);
 
         // Remove the tag
-        const deleteTag = db.prepare(`
+        executeQueryRun(`
             DELETE FROM tags 
             WHERE guild_id = ? AND tag_slug = ?
-        `);
-        deleteTag.run([guild_id, tag_slug]);
+        `, [guild_id, tag_slug]);
         saveDatabase();
     } catch (error) {
         console.error('Error removing guild tag:', error);
@@ -302,13 +342,12 @@ export async function removeGuildTag(guild_id, tag_slug) {
 
 export async function listGuildTags(guild_id) {
     try {
-        const stmt = db.prepare(`
+        const results = executeQuery(`
             SELECT tag_slug, display_name, category 
             FROM tags 
             WHERE guild_id = ? 
             ORDER BY display_name
-        `);
-        const results = stmt.all([guild_id]);
+        `, [guild_id]);
 
         return results.map(row => ({
             tag_slug: row.tag_slug,
@@ -338,8 +377,7 @@ export async function searchGuildTags(guild_id, qstr, limit = 25) {
         query += ` ORDER BY display_name LIMIT ?`;
         params.push(limit);
 
-        const stmt = db.prepare(query);
-        const results = stmt.all(params);
+        const results = executeQuery(query, params);
 
         return results.map(row => ({
             tag_slug: row.tag_slug,
@@ -358,29 +396,28 @@ export async function addUserTag(guild_id, user_id, tag_slug) {
         const cfg = await getGuildConfig(guild_id);
 
         // Check if tag exists, create if allowed
-        const tagExists = db.prepare(`
+        const tagExists = executeQuerySingle(`
             SELECT 1 FROM tags WHERE guild_id = ? AND tag_slug = ?
-        `).getAsObject([guild_id, tag_slug]);
+        `, [guild_id, tag_slug]);
 
-        if (!tagExists || Object.keys(tagExists).length === 0) {
+        if (!tagExists) {
             if (!cfg.allow_ugc_tags) {
                 const e = new Error('UGC tags are disabled in this server.');
                 e.code = 'UGC_DISABLED';
                 throw e;
             }
 
-            const createTag = db.prepare(`
+            executeQueryRun(`
                 INSERT INTO tags (guild_id, tag_slug, display_name, created_by, created_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `);
-            createTag.run([guild_id, tag_slug, tagSlugToDisplay(tag_slug), user_id]);
+            `, [guild_id, tag_slug, tagSlugToDisplay(tag_slug), user_id]);
         }
 
         // Check current tag count
-        const currentTags = db.prepare(`
+        const currentTags = executeQuery(`
             SELECT tag_slug FROM tag_members 
             WHERE guild_id = ? AND user_id = ?
-        `).all([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
         if (currentTags.length >= cfg.max_tags_per_user) {
             const e = new Error(`Max tags per user reached (${cfg.max_tags_per_user}).`);
@@ -389,11 +426,10 @@ export async function addUserTag(guild_id, user_id, tag_slug) {
         }
 
         // Add user to tag
-        const addMember = db.prepare(`
+        executeQueryRun(`
             INSERT OR IGNORE INTO tag_members (guild_id, tag_slug, user_id, added_at)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-        addMember.run([guild_id, tag_slug, user_id]);
+        `, [guild_id, tag_slug, user_id]);
 
         // Update profile tags array
         await updateProfileTags(guild_id, user_id);
@@ -410,10 +446,10 @@ export async function addMultipleUserTags(guild_id, user_id, tag_slugs) {
         const results = { success: [], failed: [] };
 
         // Get current user tags
-        const currentTags = db.prepare(`
+        const currentTags = executeQuery(`
             SELECT tag_slug FROM tag_members 
             WHERE guild_id = ? AND user_id = ?
-        `).all([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
         const currentTagSlugs = currentTags.map(t => t.tag_slug);
         const newTags = tag_slugs.filter(slug => !currentTagSlugs.includes(slug));
@@ -437,29 +473,27 @@ export async function addMultipleUserTags(guild_id, user_id, tag_slugs) {
         for (const tag_slug of newTags) {
             try {
                 // Check if tag exists, create if allowed
-                const tagExists = db.prepare(`
+                const tagExists = executeQuerySingle(`
                     SELECT 1 FROM tags WHERE guild_id = ? AND tag_slug = ?
-                `).getAsObject([guild_id, tag_slug]);
+                `, [guild_id, tag_slug]);
 
-                if (!tagExists || Object.keys(tagExists).length === 0) {
+                if (!tagExists) {
                     if (!cfg.allow_ugc_tags) {
                         results.failed.push(tag_slug);
                         continue;
                     }
 
-                    const createTag = db.prepare(`
+                    executeQueryRun(`
                         INSERT INTO tags (guild_id, tag_slug, display_name, created_by, created_at)
                         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    `);
-                    createTag.run([guild_id, tag_slug, tagSlugToDisplay(tag_slug), user_id]);
+                    `, [guild_id, tag_slug, tagSlugToDisplay(tag_slug), user_id]);
                 }
 
                 // Add user to tag
-                const addMember = db.prepare(`
+                executeQueryRun(`
                     INSERT OR IGNORE INTO tag_members (guild_id, tag_slug, user_id, added_at)
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                `);
-                addMember.run([guild_id, tag_slug, user_id]);
+                `, [guild_id, tag_slug, user_id]);
 
                 results.success.push(tag_slug);
             } catch (error) {
@@ -481,11 +515,10 @@ export async function addMultipleUserTags(guild_id, user_id, tag_slugs) {
 export async function removeUserTag(guild_id, user_id, tag_slug) {
     try {
         // Remove from tag_members
-        const removeMember = db.prepare(`
+        executeQueryRun(`
             DELETE FROM tag_members 
             WHERE guild_id = ? AND tag_slug = ? AND user_id = ?
-        `);
-        removeMember.run([guild_id, tag_slug, user_id]);
+        `, [guild_id, tag_slug, user_id]);
 
         // Update profile tags array
         await updateProfileTags(guild_id, user_id);
@@ -501,10 +534,10 @@ export async function removeMultipleUserTags(guild_id, user_id, tag_slugs) {
         const results = { success: [], failed: [] };
 
         // Get current user tags
-        const currentTags = db.prepare(`
+        const currentTags = executeQuery(`
             SELECT tag_slug FROM tag_members 
             WHERE guild_id = ? AND user_id = ?
-        `).all([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
         const currentTagSlugs = currentTags.map(t => t.tag_slug);
         const existingTags = tag_slugs.filter(slug => currentTagSlugs.includes(slug));
@@ -516,11 +549,10 @@ export async function removeMultipleUserTags(guild_id, user_id, tag_slugs) {
         // Process each tag
         for (const tag_slug of existingTags) {
             try {
-                const removeMember = db.prepare(`
+                executeQueryRun(`
                     DELETE FROM tag_members 
                     WHERE guild_id = ? AND tag_slug = ? AND user_id = ?
-                `);
-                removeMember.run([guild_id, tag_slug, user_id]);
+                `, [guild_id, tag_slug, user_id]);
 
                 results.success.push(tag_slug);
             } catch (error) {
@@ -545,14 +577,13 @@ export async function removeMultipleUserTags(guild_id, user_id, tag_slugs) {
 
 export async function listUserTags(guild_id, user_id) {
     try {
-        const stmt = db.prepare(`
+        const results = executeQuery(`
             SELECT t.tag_slug, t.display_name, t.category 
             FROM tag_members tm
             JOIN tags t ON tm.guild_id = t.guild_id AND tm.tag_slug = t.tag_slug
             WHERE tm.guild_id = ? AND tm.user_id = ?
             ORDER BY t.display_name
-        `);
-        const results = stmt.all([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
         return results.map(row => ({
             tag_slug: row.tag_slug,
@@ -567,13 +598,12 @@ export async function listUserTags(guild_id, user_id) {
 
 export async function getUsersByTag(guild_id, tag_slug, limit = 5000, offset = 0) {
     try {
-        const stmt = db.prepare(`
+        const results = executeQuery(`
             SELECT user_id FROM tag_members 
             WHERE guild_id = ? AND tag_slug = ?
             ORDER BY added_at
             LIMIT ? OFFSET ?
-        `);
-        const results = stmt.all([guild_id, tag_slug, limit, offset]);
+        `, [guild_id, tag_slug, limit, offset]);
 
         return results.map(row => ({ user_id: row.user_id }));
     } catch (error) {
@@ -599,11 +629,10 @@ export async function setUserTheme(guild_id, user_id, themeData) {
 
         values.push(guild_id, user_id);
 
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR REPLACE INTO user_themes (guild_id, user_id, ${Object.keys(themeData).join(', ')}, updated_at)
             VALUES (?, ?, ${Object.keys(themeData).map(() => '?').join(', ')}, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id, user_id, ...Object.values(themeData)]);
+        `, [guild_id, user_id, ...Object.values(themeData)]);
         saveDatabase();
     } catch (error) {
         console.error('Error setting user theme:', error);
@@ -613,14 +642,13 @@ export async function setUserTheme(guild_id, user_id, themeData) {
 
 export async function getUserTheme(guild_id, user_id) {
     try {
-        const stmt = db.prepare(`
+        const result = executeQuerySingle(`
             SELECT theme, primary_color, secondary_color, title, tags_emoji 
             FROM user_themes 
             WHERE guild_id = ? AND user_id = ?
-        `);
-        const result = stmt.getAsObject([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
-        return (result && Object.keys(result).length > 0) ? result : null;
+        return result || null;
     } catch (error) {
         console.error('Error getting user theme:', error);
         throw error;
@@ -630,11 +658,10 @@ export async function getUserTheme(guild_id, user_id) {
 // Mod config for new features
 export async function setGuildFeatureConfig(guild_id, feature, enabled) {
     try {
-        const stmt = db.prepare(`
+        executeQueryRun(`
             INSERT OR REPLACE INTO feature_configs (guild_id, ${feature}, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
-        `);
-        stmt.run([guild_id, enabled]);
+        `, [guild_id, enabled]);
         saveDatabase();
     } catch (error) {
         console.error('Error setting guild feature config:', error);
@@ -644,14 +671,13 @@ export async function setGuildFeatureConfig(guild_id, feature, enabled) {
 
 export async function getGuildFeatureConfig(guild_id) {
     try {
-        const stmt = db.prepare(`
+        const result = executeQuerySingle(`
             SELECT ping_threads, user_customization 
             FROM feature_configs 
             WHERE guild_id = ?
-        `);
-        const result = stmt.getAsObject([guild_id]);
+        `, [guild_id]);
 
-        return (result && Object.keys(result).length > 0) ? result : {
+        return result || {
             ping_threads: true,
             user_customization: true
         };
@@ -664,19 +690,18 @@ export async function getGuildFeatureConfig(guild_id) {
 // Helper function to update profile tags array
 async function updateProfileTags(guild_id, user_id) {
     try {
-        const tags = db.prepare(`
+        const tags = executeQuery(`
             SELECT tag_slug FROM tag_members 
             WHERE guild_id = ? AND user_id = ?
-        `).all([guild_id, user_id]);
+        `, [guild_id, user_id]);
 
         const tagSlugs = tags.map(t => t.tag_slug);
 
-        const stmt = db.prepare(`
+        executeQueryRun(`
             UPDATE profiles 
             SET tags = ?, updated_at = CURRENT_TIMESTAMP
             WHERE guild_id = ? AND user_id = ?
-        `);
-        stmt.run([JSON.stringify(tagSlugs), guild_id, user_id]);
+        `, [JSON.stringify(tagSlugs), guild_id, user_id]);
     } catch (error) {
         console.error('Error updating profile tags:', error);
         throw error;
