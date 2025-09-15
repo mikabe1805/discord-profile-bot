@@ -4,14 +4,13 @@
     "type": "module",
     "main": "src/index.js",
     "scripts": {
-      "dev": "node src/index.js",
-      "deploy:guild": "node src/deploy-commands.js guild",
-      "deploy:global": "node src/deploy-commands.js global"
+        "dev": "node src/index.js",
+        "deploy:guild": "node src/deploy-commands.js guild",
+        "deploy:global": "node src/deploy-commands.js global"
     },
     "dependencies": {
         "discord.js": "^14.16.3",
         "dotenv": "^16.4.5",
-        "firebase-admin": "^12.6.0"
-      }
-  }
-  
+        "sqlite3": "^5.1.7"
+    }
+}

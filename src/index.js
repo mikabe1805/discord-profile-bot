@@ -30,7 +30,7 @@ import {
     getUserTheme,
     setGuildFeatureConfig,
     getGuildFeatureConfig
-} from './db_firebase.js';
+} from './db_sqlite.js';
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
