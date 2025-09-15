@@ -9,8 +9,8 @@
         "deploy:global": "node src/deploy-commands.js global"
     },
     "dependencies": {
-        "better-sqlite3": "^12.2.0",
         "discord.js": "^14.16.3",
-        "dotenv": "^16.4.5"
+        "dotenv": "^16.4.5",
+        "sql.js": "^1.13.0"
     }
 }
