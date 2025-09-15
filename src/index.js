@@ -37,7 +37,7 @@ const client = new Client({
     partials: [Partials.GuildMember]
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
