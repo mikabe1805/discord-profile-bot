@@ -50,7 +50,7 @@ export async function startBoundariesWizard(interaction, { preset }) {
   if (!base.emotional) base.emotional = {};
   base.emotional.heavy_public = 'no';
   await upsertBoundaries(interaction.guildId, interaction.user.id, base);
-  await interaction.reply({ content: 'Boundaries setup', flags: 64, components: [templateRow(preset), sectionPickerRow()], embeds: [], ephemeral: true });
+  await interaction.reply({ content: 'Boundaries setup', flags: 64, components: [templateRow(preset), ...sectionPickerRows()], embeds: [] });
 }
 
 function templateRow(selected) {
@@ -66,7 +66,7 @@ function templateRow(selected) {
   return new ActionRowBuilder().addComponents(menu);
 }
 
-function sectionPickerRow() {
+function sectionPickerRows() {
   const menu = new StringSelectMenuBuilder()
     .setCustomId('bdry:section')
     .setPlaceholder('Pick a section to edit')
@@ -83,7 +83,7 @@ function sectionPickerRow() {
       { label: '8) Anything Else?', value: 'misc' }
     );
   const save = new ButtonBuilder().setCustomId('bdry:preview').setStyle(ButtonStyle.Primary).setLabel('Preview + Save');
-  return new ActionRowBuilder().addComponents(menu, save);
+  return [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(save)];
 }
 
 export async function handleBoundariesComponent(interaction) {
@@ -98,7 +98,7 @@ export async function handleBoundariesComponent(interaction) {
     } else {
       await upsertBoundaries(interaction.guildId, interaction.user.id, {});
     }
-    await interaction.update({ content: choice === 'blank' ? 'Starting blank.' : `Preset applied: ${choice}`, components: [templateRow(choice), sectionPickerRow()] });
+    await interaction.update({ content: choice === 'blank' ? 'Starting blank.' : `Preset applied: ${choice}`, components: [templateRow(choice), ...sectionPickerRows()] });
     return;
   }
   if (action === 'section') {
