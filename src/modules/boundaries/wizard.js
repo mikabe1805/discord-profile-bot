@@ -10,6 +10,8 @@ import {
 import { upsertBoundaries, getBoundaries } from '../../db_sqlite.js';
 import { buildBoundariesEmbed } from './embed.js';
 
+const SECTION_ORDER = ['dms','humor','identity','emotional','debate','feedback','responses','misc'];
+
 const PRESETS = {
   chill: {
     dms: { unsolicited: 'yes', casual: 'yes' },
@@ -110,6 +112,12 @@ export async function handleBoundariesComponent(interaction) {
     await previewAndSave(interaction);
     return;
   }
+  if (action === 'quick') {
+    const section = rest[0];
+    const value = rest[1]; // yes | ask | no
+    await applyQuick(interaction, section, value);
+    return;
+  }
   if (action === 'toggle') {
     const ownerId = rest[0];
     const cur = rest[1] === '1';
@@ -133,7 +141,8 @@ export async function handleBoundariesComponent(interaction) {
 async function showSection(interaction, section) {
   // Build section UI with selects/buttons and a notes button
   const rows = [];
-  const askNotes = new ButtonBuilder().setCustomId(`bdry:notes:${section}`).setStyle(ButtonStyle.Secondary).setLabel('Add/Edit notes');
+  const entry = await getBoundaries(interaction.guildId, interaction.user.id);
+  const summary = buildProgressSummary(entry?.data || {});
   if (section === 'dms') {
     rows.push(optionRow('bdry:set:dms:unsolicited', 'Receiving unsolicited DMs'));
     rows.push(optionRow('bdry:set:dms:casual', 'Starting casual 1-on-1'));
@@ -145,8 +154,14 @@ async function showSection(interaction, section) {
       { label: '⛔ Not Comfortable', value: 'no' }
     ]));
   } else if (section === 'identity') {
-    rows.push(optionRow('bdry:set:identity:comments', 'Comments on gender/sexuality/religion/ethnicity'));
-    rows.push(optionRow('bdry:set:identity:culture', 'Country/region/culture discussion'));
+    rows.push(optionRowRestricted('bdry:set:identity:comments', 'Comments on gender/sexuality/religion/ethnicity', [
+      { label: '⚠️ Ask First', value: 'ask' },
+      { label: '⛔ Not Comfortable', value: 'no' }
+    ]));
+    rows.push(optionRowRestricted('bdry:set:identity:culture', 'Country/region/culture discussion', [
+      { label: '⚠️ Ask First', value: 'ask' },
+      { label: '⛔ Not Comfortable', value: 'no' }
+    ]));
   } else if (section === 'emotional') {
     rows.push(optionRow('bdry:set:emotional:light_public', 'Light venting in public'));
     // heavy_public fixed as no; do not render control
@@ -163,8 +178,15 @@ async function showSection(interaction, section) {
   } else if (section === 'misc') {
     // Only notes
   }
-  rows.push(new ActionRowBuilder().addComponents(askNotes));
-  await interaction.update({ content: `Editing section: ${section}`, components: rows });
+  // Add quick answers + notes for most sections
+  if (section !== 'responses' && section !== 'misc') {
+    rows.push(quickNotesRow(section));
+  } else {
+    const notesBtn = new ButtonBuilder().setCustomId(`bdry:notes:${section}`).setStyle(ButtonStyle.Secondary).setLabel('Add/Edit notes');
+    rows.push(new ActionRowBuilder().addComponents(notesBtn));
+  }
+  rows.push(navRow(section));
+  await interaction.update({ content: `${summary}\nEditing section: ${prettySection(section)}`, components: rows });
 }
 
 function optionRow(customId, label) {
@@ -265,6 +287,7 @@ export async function handleBoundariesComponentRouter(interaction) {
   const id = interaction.customId;
   if (id.startsWith('bdry:set:')) return handleBoundariesValue(interaction);
   if (id.startsWith('bdry:notes:')) return openNotesModal(interaction, id.split(':')[2]);
+  if (id.startsWith('bdry:nav:')) return handleBoundariesNav(interaction);
   return handleBoundariesComponent(interaction);
 }
 
@@ -280,6 +303,159 @@ async function openNotesModal(interaction, section) {
     .setMaxLength(140);
   modal.addComponents(new ActionRowBuilder().addComponents(input));
   await interaction.showModal(modal);
+}
+
+function quickNotesRow(section) {
+  const yes = new ButtonBuilder().setCustomId(`bdry:quick:${section}:yes`).setStyle(ButtonStyle.Success).setLabel('✅ All comfortable');
+  const ask = new ButtonBuilder().setCustomId(`bdry:quick:${section}:ask`).setStyle(ButtonStyle.Secondary).setLabel('⚠️ Ask first');
+  const no = new ButtonBuilder().setCustomId(`bdry:quick:${section}:no`).setStyle(ButtonStyle.Danger).setLabel('⛔ Not comfortable');
+  const notes = new ButtonBuilder().setCustomId(`bdry:notes:${section}`).setStyle(ButtonStyle.Secondary).setLabel('Add/Edit notes');
+  return new ActionRowBuilder().addComponents(yes, ask, no, notes);
+}
+
+async function applyQuick(interaction, section, value) {
+  const existing = (await getBoundaries(interaction.guildId, interaction.user.id))?.data || {};
+  const set = (sec, key, v) => {
+    if (!existing[sec]) existing[sec] = {};
+    existing[sec][key] = v;
+  };
+  const mapAllowed = (allowedYes) => (value === 'yes' ? (allowedYes ? 'yes' : 'ask') : value);
+  switch (section) {
+    case 'dms':
+      set('dms', 'unsolicited', mapAllowed(true));
+      set('dms', 'casual', mapAllowed(true));
+      break;
+    case 'humor':
+      set('humor', 'sarcasm', mapAllowed(true));
+      set('humor', 'edgy', mapAllowed(true));
+      // claiming cannot be 'yes'
+      set('humor', 'claiming', value === 'no' ? 'no' : 'ask');
+      break;
+    case 'identity':
+      // only ask/no permitted
+      set('identity', 'comments', value === 'no' ? 'no' : 'ask');
+      set('identity', 'culture', value === 'no' ? 'no' : 'ask');
+      break;
+    case 'emotional':
+      set('emotional', 'light_public', mapAllowed(true));
+      set('emotional', 'heavy_dm', mapAllowed(true));
+      break;
+    case 'debate':
+      set('debate', 'casual', mapAllowed(true));
+      set('debate', 'devils', mapAllowed(true));
+      // tone unchanged
+      break;
+    case 'feedback':
+      set('feedback', 'critique', mapAllowed(true));
+      set('feedback', 'public_tag', mapAllowed(true));
+      break;
+    default:
+      break;
+  }
+  // enforce fixed rule
+  if (!existing.emotional) existing.emotional = {};
+  existing.emotional.heavy_public = 'no';
+  await upsertBoundaries(interaction.guildId, interaction.user.id, existing);
+  // refresh section UI
+  await showSection(interaction, section);
+}
+
+function buildProgressSummary(data) {
+  const parts = [];
+  for (const key of SECTION_ORDER) {
+    const st = sectionStatus(key, data[key] || {});
+    parts.push(`${shortName(key)} ${st}`);
+  }
+  return `Summary: ${parts.join(' • ')}`;
+}
+
+function sectionStatus(section, s) {
+  const mark = (n, total) => (n >= total ? '✅' : (n > 0 ? '⚠️' : '•'));
+  switch (section) {
+    case 'dms': {
+      const n = Number(Boolean(s.unsolicited)) + Number(Boolean(s.casual));
+      return mark(n, 2);
+    }
+    case 'humor': {
+      const n = Number(Boolean(s.sarcasm)) + Number(Boolean(s.edgy)) + Number(Boolean(s.claiming));
+      return mark(n, 3);
+    }
+    case 'identity': {
+      const n = Number(Boolean(s.comments)) + Number(Boolean(s.culture));
+      return mark(n, 2);
+    }
+    case 'emotional': {
+      const n = Number(Boolean(s.light_public)) + Number(Boolean(s.heavy_dm));
+      return mark(n, 2);
+    }
+    case 'debate': {
+      const n = Number(Boolean(s.casual)) + Number(Boolean(s.devils)) + Number(Boolean(s.tone));
+      return mark(n, 3);
+    }
+    case 'feedback': {
+      const n = Number(Boolean(s.critique)) + Number(Boolean(s.public_tag));
+      return mark(n, 2);
+    }
+    case 'responses': {
+      const n = Array.isArray(s.actions) && s.actions.length ? 1 : 0;
+      return mark(n, 1);
+    }
+    case 'misc': {
+      const n = s.notes || s.text ? 1 : 0;
+      return mark(n, 1);
+    }
+  }
+  return '•';
+}
+
+function shortName(key) {
+  switch (key) {
+    case 'dms': return 'DMs';
+    case 'humor': return 'Humor';
+    case 'identity': return 'ID';
+    case 'emotional': return 'Emo';
+    case 'debate': return 'Debate';
+    case 'feedback': return 'Feedback';
+    case 'responses': return 'Resp';
+    case 'misc': return 'Misc';
+    default: return key;
+  }
+}
+
+function prettySection(key) {
+  switch (key) {
+    case 'dms': return 'DMs & Contact';
+    case 'humor': return 'Humor & Tone';
+    case 'identity': return 'Identity & Background';
+    case 'emotional': return 'Emotional Topics';
+    case 'debate': return 'Debate & Conflict';
+    case 'feedback': return 'Feedback & Criticism';
+    case 'responses': return 'Boundary Responses';
+    case 'misc': return 'Anything Else?';
+    default: return key;
+  }
+}
+
+function navRow(section) {
+  const idx = SECTION_ORDER.indexOf(section);
+  const prev = SECTION_ORDER[(idx - 1 + SECTION_ORDER.length) % SECTION_ORDER.length];
+  const next = SECTION_ORDER[(idx + 1) % SECTION_ORDER.length];
+  const prevBtn = new ButtonBuilder().setCustomId(`bdry:nav:prev:${prev}`).setStyle(ButtonStyle.Secondary).setLabel('◀ Previous');
+  const listBtn = new ButtonBuilder().setCustomId('bdry:nav:list').setStyle(ButtonStyle.Secondary).setLabel('Section list');
+  const nextBtn = new ButtonBuilder().setCustomId(`bdry:nav:next:${next}`).setStyle(ButtonStyle.Secondary).setLabel('Next ▶');
+  const previewBtn = new ButtonBuilder().setCustomId('bdry:preview').setStyle(ButtonStyle.Primary).setLabel('Preview + Save');
+  return new ActionRowBuilder().addComponents(prevBtn, listBtn, nextBtn, previewBtn);
+}
+
+async function handleBoundariesNav(interaction) {
+  const parts = interaction.customId.split(':');
+  const action = parts[2];
+  if (action === 'list') {
+    await interaction.update({ content: 'Boundaries setup', components: [templateRow(null), ...sectionPickerRows()] });
+    return;
+  }
+  const target = parts[3];
+  await showSection(interaction, target);
 }
 
 
