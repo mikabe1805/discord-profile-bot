@@ -114,11 +114,27 @@ async function initDatabase() {
             )
         `);
 
+        // Boundaries cards
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS boundaries (
+                guild_id TEXT,
+                user_id TEXT,
+                data TEXT, -- JSON answers + notes
+                privacy_level TEXT DEFAULT 'members', -- everyone | members | role | friends
+                privacy_role_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (guild_id, user_id),
+                FOREIGN KEY (guild_id) REFERENCES guilds(guild_id)
+            )
+        `);
+
         // Create indexes for better performance
         db.exec(`CREATE INDEX IF NOT EXISTS idx_profiles_guild_user ON profiles(guild_id, user_id)`);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_tags_guild ON tags(guild_id)`);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_tag_members_guild_tag ON tag_members(guild_id, tag_slug)`);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_tag_members_user ON tag_members(guild_id, user_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_boundaries_guild_user ON boundaries(guild_id, user_id)`);
 
         // Save the database
         saveDatabase();
@@ -725,6 +741,82 @@ export async function getGuildFeatureConfig(guild_id) {
         };
     } catch (error) {
         console.error('Error getting guild feature config:', error);
+        throw error;
+    }
+}
+
+// ---- Boundaries storage ----
+export async function upsertBoundaries(guild_id, user_id, data, privacy) {
+    await initDatabase();
+    try {
+        const existing = executeQuerySingle(`
+            SELECT privacy_level, privacy_role_id FROM boundaries WHERE guild_id = ? AND user_id = ?
+        `, [guild_id, user_id]);
+
+        const privacy_level = privacy?.level || existing?.privacy_level || 'members';
+        const privacy_role_id = privacy?.roleId !== undefined ? privacy.roleId : (existing ? existing.privacy_role_id : null);
+
+        executeQueryRun(`
+            INSERT OR REPLACE INTO boundaries (guild_id, user_id, data, privacy_level, privacy_role_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM boundaries WHERE guild_id = ? AND user_id = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+        `, [guild_id, user_id, JSON.stringify(data || {}), privacy_level, privacy_role_id, guild_id, user_id]);
+        saveDatabase();
+    } catch (error) {
+        console.error('Error upserting boundaries:', error);
+        throw error;
+    }
+}
+
+export async function getBoundaries(guild_id, user_id) {
+    await initDatabase();
+    try {
+        const row = executeQuerySingle(`
+            SELECT data, privacy_level, privacy_role_id, created_at, updated_at FROM boundaries
+            WHERE guild_id = ? AND user_id = ?
+        `, [guild_id, user_id]);
+        if (!row) return null;
+        return {
+            data: row.data ? JSON.parse(row.data) : {},
+            privacy_level: row.privacy_level || 'members',
+            privacy_role_id: row.privacy_role_id || null,
+            created_at: row.created_at,
+            updated_at: row.updated_at
+        };
+    } catch (error) {
+        console.error('Error getting boundaries:', error);
+        throw error;
+    }
+}
+
+export async function removeBoundaries(guild_id, user_id) {
+    await initDatabase();
+    try {
+        executeQueryRun(`
+            DELETE FROM boundaries WHERE guild_id = ? AND user_id = ?
+        `, [guild_id, user_id]);
+        saveDatabase();
+    } catch (error) {
+        console.error('Error removing boundaries:', error);
+        throw error;
+    }
+}
+
+export async function setBoundariesPrivacy(guild_id, user_id, level, roleId = null) {
+    await initDatabase();
+    try {
+        executeQueryRun(`
+            INSERT OR REPLACE INTO boundaries (guild_id, user_id, data, privacy_level, privacy_role_id, created_at, updated_at)
+            VALUES (
+                ?, ?,
+                COALESCE((SELECT data FROM boundaries WHERE guild_id = ? AND user_id = ?), '{}'),
+                ?, ?,
+                COALESCE((SELECT created_at FROM boundaries WHERE guild_id = ? AND user_id = ?), CURRENT_TIMESTAMP),
+                CURRENT_TIMESTAMP
+            )
+        `, [guild_id, user_id, guild_id, user_id, level, roleId, guild_id, user_id]);
+        saveDatabase();
+    } catch (error) {
+        console.error('Error setting boundaries privacy:', error);
         throw error;
     }
 }

@@ -31,6 +31,14 @@ import {
     setGuildFeatureConfig,
     getGuildFeatureConfig
 } from './db_sqlite.js';
+import {
+  upsertBoundaries,
+  getBoundaries,
+  removeBoundaries,
+  setBoundariesPrivacy
+} from './db_sqlite.js';
+import { buildBoundariesEmbed } from './modules/boundaries/embed.js';
+import { startBoundariesWizard, handleBoundariesComponentRouter, handleBoundariesModal } from './modules/boundaries/wizard.js';
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -77,6 +85,17 @@ client.on('interactionCreate', async(i) => {
             }
 
             try {
+                // -------- Boundaries component handlers --------
+                if (i.isStringSelectMenu() || i.isButton()) {
+                    if (i.customId && i.customId.startsWith('bdry:')) {
+                        return void handleBoundariesComponentRouter(i);
+                    }
+                }
+                if (i.isModalSubmit()) {
+                    if (i.customId && i.customId.startsWith('bdry:')) {
+                        return void handleBoundariesModal(i);
+                    }
+                }
                 // -------- Autocomplete ----------
                 if (i.type === InteractionType.ApplicationCommandAutocomplete) {
                     const focused = i.options.getFocused(true);
@@ -118,6 +137,60 @@ client.on('interactionCreate', async(i) => {
 
                 if (!i.isChatInputCommand()) return;
                 const name = i.commandName;
+                // -------- boundaries -----------
+                if (name === 'boundaries') {
+                  const sub = i.options.getSubcommand();
+                  if (sub === 'set') {
+                    await startBoundariesWizard(i, { preset: null });
+                    return;
+                  }
+                  if (sub === 'template') {
+                    const preset = i.options.getString('preset', true);
+                    await startBoundariesWizard(i, { preset });
+                    return;
+                  }
+                  if (sub === 'privacy') {
+                    const level = i.options.getString('visibility', true);
+                    const role = i.options.getRole('role');
+                    await i.deferReply({ flags: 64 });
+                    if (level === 'role' && !role) {
+                      await i.editReply('Please provide a role for Role-gated visibility.');
+                      return;
+                    }
+                    await setBoundariesPrivacy(i.guildId, i.user.id, level, role ? role.id : null);
+                    await i.editReply(`✅ Privacy set to \`${level}\`${role ? ` (role: <@&${role.id}>)` : ''}.`);
+                    return;
+                  }
+                  if (sub === 'remove') {
+                    await i.deferReply({ flags: 64 });
+                    await removeBoundaries(i.guildId, i.user.id);
+                    await i.editReply('🗑️ Your Boundaries Card was removed.');
+                    return;
+                  }
+                  if (sub === 'view') {
+                    const target = i.options.getUser('user') || i.user;
+                    await i.deferReply();
+                    const entry = await getBoundaries(i.guildId, target.id);
+                    if (!entry) {
+                      await i.editReply('No Boundaries Card found. Use `/boundaries set` to create one.');
+                      return;
+                    }
+                    const canView = await canViewBoundaries(i, target.id, entry);
+                    if (!canView) {
+                      await i.editReply('⛔ You cannot view this Boundaries Card due to privacy settings.');
+                      return;
+                    }
+                    const embedPayload = await buildBoundariesEmbed({
+                      guild: i.guild,
+                      viewerId: i.user.id,
+                      ownerId: target.id,
+                      data: entry.data,
+                      detailed: false
+                    });
+                    await i.editReply(embedPayload);
+                    return;
+                  }
+                }
 
                 // -------- profile_set -----------
                 if (name === 'profile_set') {
@@ -553,6 +626,7 @@ client.on('interactionCreate', async(i) => {
 
       const rawTags = i.options.getString('tags', true);
       const message = i.options.getString('message') || 'Check this out!';
+      const createThread = i.options.getBoolean('create_thread') || false;
       const threadName = i.options.getString('thread_name') || `Discussion: ${rawTags}`;
 
       await i.deferReply();
@@ -581,34 +655,36 @@ client.on('interactionCreate', async(i) => {
       // Send ping message
       await i.editReply(pingMessage);
 
-      // Create thread
-      try {
-        const thread = await i.channel.threads.create({
-          name: threadName,
-          autoArchiveDuration: 60, // 1 hour
-          reason: `Discussion thread for tags: ${tagList.join(', ')}`
-        });
+      if (createThread) {
+        // Create thread
+        try {
+          const thread = await i.channel.threads.create({
+            name: threadName,
+            autoArchiveDuration: 60, // 1 hour
+            reason: `Discussion thread for tags: ${tagList.join(', ')}`
+          });
 
-        // Send initial message in thread
-        const threadEmbed = new EmbedBuilder()
-          .setAuthor({ 
-            name: `${i.user.displayName || i.user.username}`, 
-            iconURL: i.user.displayAvatarURL({ dynamic: true, size: 256 })
-          })
-          .setTitle('💬 Discussion Thread')
-          .setDescription(`This thread was created for discussing: **${tagList.map(t => `\`${t}\``).join(', ')}**\n\nFeel free to chat and connect with others who share these interests!`)
-          .setColor('#5865F2')
-          .setFooter({ 
-            text: `Created by ${i.user.username}`,
-            iconURL: i.user.displayAvatarURL({ dynamic: true, size: 32 })
-          })
-          .setTimestamp();
+          // Send initial message in thread
+          const threadEmbed = new EmbedBuilder()
+            .setAuthor({ 
+              name: `${i.user.displayName || i.user.username}`, 
+              iconURL: i.user.displayAvatarURL({ dynamic: true, size: 256 })
+            })
+            .setTitle('💬 Discussion Thread')
+            .setDescription(`This thread was created for discussing: **${tagList.map(t => `\`${t}\``).join(', ')}**\n\nFeel free to chat and connect with others who share these interests!`)
+            .setColor('#5865F2')
+            .setFooter({ 
+              text: `Created by ${i.user.username}`,
+              iconURL: i.user.displayAvatarURL({ dynamic: true, size: 32 })
+            })
+            .setTimestamp();
 
-        await thread.send({ embeds: [threadEmbed] });
-        await i.followUp(`✅ Created discussion thread: ${thread}`);
-      } catch (error) {
-        console.log('Failed to create thread:', error);
-        await i.followUp('⚠️ Ping sent, but failed to create discussion thread.');
+          await thread.send({ embeds: [threadEmbed] });
+          await i.followUp(`✅ Created discussion thread: ${thread}`);
+        } catch (error) {
+          console.log('Failed to create thread:', error);
+          await i.followUp('⚠️ Ping sent, but failed to create discussion thread.');
+        }
       }
       return;
     }
@@ -1207,4 +1283,24 @@ async function replyUserList(i, slug, publicVisible) {
   for (let c = 1; c < chunks.length; c++) {
     await i.followUp(publicVisible ? { content: chunks[c].join(' ') } : { content: chunks[c].join(' '), flags: 64 });
   }
+}
+
+// Boundaries privacy check
+async function canViewBoundaries(i, ownerId, entry) {
+  if (i.user.id === ownerId) return true;
+  if (isMod(i)) return true;
+  const level = entry.privacy_level || 'members';
+  if (level === 'everyone') return true;
+  if (level === 'members') return true; // already in a guild context
+  if (level === 'role') {
+    const roleId = entry.privacy_role_id;
+    if (!roleId) return false;
+    const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+    return Boolean(member?.roles?.cache?.has(roleId));
+  }
+  if (level === 'friends') {
+    // Discord API doesn't expose friendship in guilds; restrict to self/mods
+    return false;
+  }
+  return false;
 }

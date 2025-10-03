@@ -97,6 +97,7 @@ const commands = [
     .setDescription('Ping users with specific tags and create a discussion thread')
     .addStringOption(o => o.setName('tags').setDescription('Comma-separated tags to ping users for').setRequired(true).setAutocomplete(true))
     .addStringOption(o => o.setName('message').setDescription('Message to include with the ping').setRequired(false).setMaxLength(500))
+    .addBooleanOption(o => o.setName('create_thread').setDescription('Also create a discussion thread').setRequired(false))
     .addStringOption(o => o.setName('thread_name').setDescription('Name for the discussion thread').setRequired(false).setMaxLength(100)),
 
     new SlashCommandBuilder()
@@ -118,6 +119,49 @@ const commands = [
     new SlashCommandBuilder()
     .setName('features_get')
     .setDescription('View current feature settings (moderator only)')
+    ,
+
+    // Boundaries
+    new SlashCommandBuilder()
+    .setName('boundaries')
+    .setDescription('Manage personal Boundaries Card')
+    .addSubcommand(sc => sc
+        .setName('set')
+        .setDescription('Open the boundaries wizard (ephemeral)')
+    )
+    .addSubcommand(sc => sc
+        .setName('view')
+        .setDescription('View a user\'s Boundaries Card')
+        .addUserOption(o => o.setName('user').setDescription('User to view').setRequired(false))
+    )
+    .addSubcommand(sc => sc
+        .setName('template')
+        .setDescription('Apply a preset to prefill answers')
+        .addStringOption(o => o.setName('preset').setDescription('Choose a preset').setRequired(true)
+            .addChoices(
+                { name: '🧊 Chill', value: 'chill' },
+                { name: '❓ Ask-First', value: 'ask' },
+                { name: '🛡️ Conservative', value: 'conservative' }
+            )
+        )
+    )
+    .addSubcommand(sc => sc
+        .setName('privacy')
+        .setDescription('Set who can view your Boundaries Card')
+        .addStringOption(o => o.setName('visibility').setDescription('Visibility level').setRequired(true)
+            .addChoices(
+                { name: '🌐 Everyone', value: 'everyone' },
+                { name: '👥 Members', value: 'members' },
+                { name: '🧩 Role-gated', value: 'role' },
+                { name: '🤝 Friends-only', value: 'friends' }
+            )
+        )
+        .addRoleOption(o => o.setName('role').setDescription('Required role (for Role-gated)').setRequired(false))
+    )
+    .addSubcommand(sc => sc
+        .setName('remove')
+        .setDescription('Delete your Boundaries Card')
+    )
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
