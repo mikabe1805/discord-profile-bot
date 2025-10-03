@@ -17,6 +17,30 @@ const SECTION_LABELS = {
   misc: 'Anything Else?'
 };
 
+const ITEM_HELP = {
+  // DMs
+  unsolicited: 'Receiving unsolicited DMs',
+  casual: 'Starting casual one-on-one chats',
+  // Humor
+  sarcasm: 'Sarcasm or playful teasing',
+  edgy: 'Edgy/dark jokes (e.g., trauma, gore)',
+  claiming: '“Claiming” bigotry as a joke (e.g., calling yourself racist/sexist ironically)',
+  // Identity
+  comments: 'Comments about my gender/sexuality/religion/ethnicity',
+  culture: 'Critique/jokes about my country/region/culture',
+  // Emotional
+  light_public: 'Light venting in public spaces',
+  heavy_public: 'Heavy trauma/sensitive topics in public spaces (always ⛔)',
+  heavy_dm: 'Receiving heavy topics in DMs',
+  // Debate
+  casual_debate: 'Casual debate in general spaces',
+  devils: '“Devil’s advocate” arguments on my posts',
+  tone: 'Tone I’m comfortable with',
+  // Feedback
+  critique: 'Unsolicited critique of my work/ideas',
+  public_tag: 'Publicly tagging me to ask for feedback',
+};
+
 function summarizeSection(sectionKey, data) {
   const s = data?.[sectionKey] || {};
   const lines = [];
@@ -27,31 +51,31 @@ function summarizeSection(sectionKey, data) {
   };
   switch (sectionKey) {
     case 'dms':
-      add('Unsolicited DMs', 'unsolicited');
-      add('1:1 casual chat', 'casual');
+      add(`${ITEM_HELP.unsolicited}`, 'unsolicited');
+      add(`${ITEM_HELP.casual}`, 'casual');
       break;
     case 'humor':
-      add('Sarcasm/teasing', 'sarcasm');
-      add('Edgy/dark jokes', 'edgy');
-      add('“Claiming” bigotry jokes', 'claiming');
+      add(`${ITEM_HELP.sarcasm}`, 'sarcasm');
+      add(`${ITEM_HELP.edgy}`, 'edgy');
+      add(`${ITEM_HELP.claiming}`, 'claiming');
       break;
     case 'identity':
-      add('Comments on identity', 'comments');
-      add('Country/culture discussion', 'culture');
+      add(`${ITEM_HELP.comments}`, 'comments');
+      add(`${ITEM_HELP.culture}`, 'culture');
       break;
     case 'emotional':
-      add('Light venting in public', 'light_public');
+      add(`${ITEM_HELP.light_public}`, 'light_public');
       // heavy_public fixed to no
-      add('Receive heavy topics in DMs', 'heavy_dm');
+      add(`${ITEM_HELP.heavy_dm}`, 'heavy_dm');
       break;
     case 'debate':
-      add('Casual debate in general', 'casual');
-      add('Devil’s advocate on my posts', 'devils');
-      if (s.tone) lines.push(`Tone: ${toneLabel(s.tone)}`);
+      add(`${ITEM_HELP.casual_debate}`, 'casual');
+      add(`${ITEM_HELP.devils}`, 'devils');
+      if (s.tone) lines.push(`${ITEM_HELP.tone}: ${toneLabel(s.tone)}`);
       break;
     case 'feedback':
-      add('Unsolicited critique', 'critique');
-      add('Public @ for feedback', 'public_tag');
+      add(`${ITEM_HELP.critique}`, 'critique');
+      add(`${ITEM_HELP.public_tag}`, 'public_tag');
       break;
     case 'responses':
       const resp = Array.isArray(s.actions) ? s.actions : [];
@@ -85,7 +109,7 @@ function mapValue(v) {
   return v;
 }
 
-export async function buildBoundariesEmbed({ guild, viewerId, ownerId, data, detailed = false }) {
+export async function buildBoundariesEmbed({ guild, viewerId, ownerId, ownerName, ownerAvatarUrl, data, detailed = false }) {
   const color = 0x5865F2;
 
   // enforce rules
@@ -93,7 +117,7 @@ export async function buildBoundariesEmbed({ guild, viewerId, ownerId, data, det
   data.emotional.heavy_public = 'no';
 
   const embed = new EmbedBuilder()
-    .setAuthor({ name: 'Boundaries Card', iconURL: guild?.iconURL?.() || undefined })
+    .setAuthor({ name: `${ownerName ? ownerName + ' — ' : ''}Boundaries Card`, iconURL: ownerAvatarUrl || guild?.iconURL?.() || undefined })
     .setColor(color)
     .setFooter({ text: ownerId === viewerId ? 'You can edit this via /boundaries set' : 'Respect others’ boundaries' })
     .setTimestamp();

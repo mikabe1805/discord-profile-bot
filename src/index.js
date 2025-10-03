@@ -169,7 +169,7 @@ client.on('interactionCreate', async(i) => {
                   }
                   if (sub === 'view') {
                     const target = i.options.getUser('user') || i.user;
-                    await i.deferReply();
+                    await i.deferReply({ flags: 64 });
                     const entry = await getBoundaries(i.guildId, target.id);
                     if (!entry) {
                       await i.editReply('No Boundaries Card found. Use `/boundaries set` to create one.');
@@ -184,6 +184,8 @@ client.on('interactionCreate', async(i) => {
                       guild: i.guild,
                       viewerId: i.user.id,
                       ownerId: target.id,
+                      ownerName: target.displayName || target.username,
+                      ownerAvatarUrl: target.displayAvatarURL({ dynamic: true, size: 256 }),
                       data: entry.data,
                       detailed: false
                     });

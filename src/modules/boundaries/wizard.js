@@ -158,7 +158,7 @@ async function showSection(interaction, section) {
       { label: '⚠️ Ask First', value: 'ask' },
       { label: '⛔ Not Comfortable', value: 'no' }
     ]));
-    rows.push(optionRowRestricted('bdry:set:identity:culture', 'Country/region/culture discussion', [
+    rows.push(optionRowRestricted('bdry:set:identity:culture', 'Critique/jokes about my country/region/culture', [
       { label: '⚠️ Ask First', value: 'ask' },
       { label: '⛔ Not Comfortable', value: 'no' }
     ]));
@@ -442,7 +442,7 @@ function navRow(section) {
   const next = SECTION_ORDER[(idx + 1) % SECTION_ORDER.length];
   const prevBtn = new ButtonBuilder().setCustomId(`bdry:nav:prev:${prev}`).setStyle(ButtonStyle.Secondary).setLabel('◀ Previous');
   const listBtn = new ButtonBuilder().setCustomId('bdry:nav:list').setStyle(ButtonStyle.Secondary).setLabel('Section list');
-  const nextBtn = new ButtonBuilder().setCustomId(`bdry:nav:next:${next}`).setStyle(ButtonStyle.Secondary).setLabel('Next ▶');
+  const nextBtn = new ButtonBuilder().setCustomId(`bdry:nav:next:${next}`).setStyle(ButtonStyle.Secondary).setLabel(idx === SECTION_ORDER.length - 1 ? 'Next ▶ (Preview)' : 'Next ▶');
   const previewBtn = new ButtonBuilder().setCustomId('bdry:preview').setStyle(ButtonStyle.Primary).setLabel('Preview + Save');
   return new ActionRowBuilder().addComponents(prevBtn, listBtn, nextBtn, previewBtn);
 }
@@ -455,6 +455,11 @@ async function handleBoundariesNav(interaction) {
     return;
   }
   const target = parts[3];
+  if (action === 'next' && parts[3] === 'misc') {
+    // move to preview when hitting next after Misc
+    await previewAndSave(interaction);
+    return;
+  }
   await showSection(interaction, target);
 }
 
