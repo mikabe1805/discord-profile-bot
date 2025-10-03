@@ -162,6 +162,12 @@ const commands = [
         .setName('remove')
         .setDescription('Delete your Boundaries Card')
     )
+    ,
+
+    // Debug: db info (mod-only)
+    new SlashCommandBuilder()
+    .setName('db_info')
+    .setDescription('Show database path, size, and basic counts (mod-only)')
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);

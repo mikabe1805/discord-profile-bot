@@ -29,7 +29,8 @@ import {
     setUserTheme,
     getUserTheme,
     setGuildFeatureConfig,
-    getGuildFeatureConfig
+    getGuildFeatureConfig,
+    getDatabaseInfo
 } from './db_sqlite.js';
 import {
   upsertBoundaries,
@@ -520,6 +521,15 @@ client.on('interactionCreate', async(i) => {
       
       const helpEmbed = generateHelpEmbed(category, i.user);
       await i.editReply({ embeds: [helpEmbed] });
+      return;
+    }
+
+    // -------- db_info (private debug) ------------
+    if (name === 'db_info') {
+      if (!isMod(i)) return i.reply({ content: 'Mod-only.', flags: 64 });
+      await i.deferReply({ flags: 64 });
+      const info = await getDatabaseInfo();
+      await i.editReply(`DB Path: \`${info.path}\`\nSize: ${info.size} bytes\nCounts: profiles=${info.counts.profiles}, tags=${info.counts.tags}, members=${info.counts.tag_members}, boundaries=${info.counts.boundaries}`);
       return;
     }
 

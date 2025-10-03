@@ -13,6 +13,15 @@ let SQL = null;
 let db = null;
 let isInitialized = false;
 
+function getDatabasePath() {
+    const customDir = process.env.DATA_DIR && process.env.DATA_DIR.trim().length > 0 ? process.env.DATA_DIR : null;
+    const dataDir = customDir ? customDir : path.join(__dirname, '..', 'data');
+    if (!fs.existsSync(dataDir)) {
+        try { fs.mkdirSync(dataDir, { recursive: true }); } catch (_) {}
+    }
+    return path.join(dataDir, 'bot.db');
+}
+
 // Initialize database
 async function initDatabase() {
     if (isInitialized) return;
@@ -20,13 +29,7 @@ async function initDatabase() {
     try {
         SQL = await initSqlJs();
 
-        // Create data directory if it doesn't exist
-        const dataDir = path.join(__dirname, '..', 'data');
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-
-        const dbPath = path.join(dataDir, 'bot.db');
+        const dbPath = getDatabasePath();
 
         // Load existing database or create new one
         if (fs.existsSync(dbPath)) {
@@ -140,7 +143,7 @@ async function initDatabase() {
         saveDatabase();
 
         isInitialized = true;
-        console.log('✅ SQLite database initialized successfully');
+        console.log(`✅ SQLite database initialized at ${dbPath}`);
     } catch (error) {
         console.error('❌ Error initializing database:', error);
         throw error;
@@ -153,7 +156,7 @@ function saveDatabase() {
         if (!db) return;
         const data = db.export();
         const buffer = Buffer.from(data);
-        const dbPath = path.join(__dirname, '..', 'data', 'bot.db');
+        const dbPath = getDatabasePath();
         fs.writeFileSync(dbPath, buffer);
     } catch (error) {
         console.error('Error saving database:', error);
@@ -248,10 +251,18 @@ export async function upsertGuild(guild_id) {
 export async function upsertProfile(guild_id, user_id, bio = '', profile_image = null) {
     await initDatabase();
     try {
+        // Ensure row exists without clobbering tags
         executeQueryRun(`
-            INSERT OR REPLACE INTO profiles (guild_id, user_id, bio, profile_image, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `, [guild_id, user_id, bio, profile_image]);
+            INSERT OR IGNORE INTO profiles (guild_id, user_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        `, [guild_id, user_id]);
+
+        // Update only the changed fields to preserve tags
+        executeQueryRun(`
+            UPDATE profiles
+            SET bio = ?, profile_image = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE guild_id = ? AND user_id = ?
+        `, [bio, profile_image, guild_id, user_id]);
         saveDatabase();
     } catch (error) {
         console.error('Error upserting profile:', error);
@@ -851,11 +862,32 @@ function tagSlugToDisplay(slug) {
 export async function debugDatabase() {
     await initDatabase();
     try {
-        const results = executeQuery('SELECT * FROM profiles');
-        console.log('All profiles in database:', results);
-        return results;
+        const info = await getDatabaseInfo();
+        console.log('Database info:', info);
+        return info;
     } catch (error) {
         console.error('Error debugging database:', error);
+        throw error;
+    }
+}
+
+export async function getDatabaseInfo() {
+    await initDatabase();
+    try {
+        const dbPath = getDatabasePath();
+        const size = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+        const counts = {
+            guilds: executeQuerySingle('SELECT COUNT(1) as c FROM guilds')?.c || 0,
+            profiles: executeQuerySingle('SELECT COUNT(1) as c FROM profiles')?.c || 0,
+            tags: executeQuerySingle('SELECT COUNT(1) as c FROM tags')?.c || 0,
+            tag_members: executeQuerySingle('SELECT COUNT(1) as c FROM tag_members')?.c || 0,
+            user_themes: executeQuerySingle('SELECT COUNT(1) as c FROM user_themes')?.c || 0,
+            feature_configs: executeQuerySingle('SELECT COUNT(1) as c FROM feature_configs')?.c || 0,
+            boundaries: executeQuerySingle('SELECT COUNT(1) as c FROM boundaries')?.c || 0
+        };
+        return { path: dbPath, size, counts };
+    } catch (error) {
+        console.error('Error getting database info:', error);
         throw error;
     }
 }
