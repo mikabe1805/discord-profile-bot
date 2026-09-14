@@ -23,9 +23,9 @@ Enable **Server Members Intent** for Bio in the Discord Developer Portal. The bo
 ## First deploy and migration
 
 1. In Railway, open the existing Bio service and verify the project/environment/service are the intended ones.
-2. Export a copy of any existing `/app/data/bot.db` from the old service filesystem before attaching the volume. Keep that copy outside Git.
-3. Scale the worker to zero so it cannot write between the backup and cutover.
-4. Attach the volume at `/data`, set `DATA_DIR=/data`, and upload the backed-up database as `/data/bot.db` before restarting the worker.
+2. Export a copy of any existing `/app/data/bot.db` from the old service filesystem before attaching the volume. If SQLite WAL sidecars or `/app/data/profile-images` exist, export those too. Keep every copy outside Git.
+3. Record the active region and replica count, then scale that region to zero so the worker cannot write between the final backup and cutover. Take a second database copy after the worker has stopped when Railway still permits access, and verify the copy with SQLite's integrity check.
+4. Attach the volume at `/data`, set `DATA_DIR=/data`, and upload the backed-up database before restarting the worker. Railway CLI volume-file paths start at the volume root, so upload the database to `/bot.db`; it appears inside the service as `/data/bot.db`. Select the volume by its exact ID when using non-interactive file commands.
 5. Deploy the release and restore one replica. Startup applies numbered migrations; legacy profiles and tags are retained, while profiles that never made an explicit visibility choice migrate hidden.
 6. Check the deploy logs for successful command registration, migrations, and `ready` status. Run `scripts/verify-data.js` against the mounted database if Railway shell access is available.
 
@@ -39,7 +39,7 @@ After a deploy, verify both `PRAGMA integrity_check` and the expected database f
 
 ## Rollback
 
-First use Railway's deployment history to redeploy the last known-good commit. Keep the current volume attached and do not replace the database during a code-only rollback. If a migration has already changed the schema, restore the pre-deploy database backup only after stopping the service and preserving the current copy. Then redeploy the compatible commit and inspect logs before allowing normal use.
+First use Railway's dashboard deployment history to restore the last known-good commit, or deploy a checkout of that commit with the CLI. Railway CLI 5.54 cannot select an arbitrary historical deployment with `deployment redeploy`. Keep the current volume attached and do not replace the database during a code-only rollback. If a migration has already changed the schema, restore the pre-deploy database backup only after stopping the service and preserving the current copy. With the CLI, upload that copy to the volume-root path `/bot.db`. Then deploy the compatible commit, restore one replica, and inspect logs before allowing normal use.
 
 ## Logs and smoke checks
 
