@@ -14,7 +14,7 @@ DATA_DIR=/data
 NIXPACKS_NODE_VERSION=22
 ```
 
-`CLIENT_ID` and `GUILD_ID` let `npm run start:production` refresh the guild command set after the gateway connects. `NIXPACKS_NODE_VERSION` selects the Node 22 build image; `package.json` enforces the minimum supported minor version. Keep the token in Railway's variable store; do not commit `.env` or print it in logs.
+`CLIENT_ID` and `GUILD_ID` let `npm run start:production` refresh the guild command set after the gateway connects. `NIXPACKS_NODE_VERSION` selects the Node 22 build image; `package.json` enforces the minimum supported minor version. `nixpacks.toml` adds the Python, C/C++, and Make toolchain needed when `better-sqlite3` must compile during `npm ci`. Keep the token in Railway's variable store; do not commit `.env` or print it in logs.
 
 The repository's `railway.json` starts `npm run start:production`. Startup runs migrations, connects the bot, then refreshes the guild command set. A command-registration outage is logged without taking the connected bot back down. The service should have one replica while it owns this SQLite file.
 
