@@ -24,16 +24,19 @@ Enable **Server Members Intent** for Bio in the Discord Developer Portal. The bo
 
 1. In Railway, open the existing Bio service and verify the project/environment/service are the intended ones.
 2. Export a copy of any existing `/app/data/bot.db` from the old service filesystem before attaching the volume. If SQLite WAL sidecars or `/app/data/profile-images` exist, export those too. Keep every copy outside Git.
-3. Record the active region and replica count, then scale that region to zero so the worker cannot write between the final backup and cutover. Take a second database copy after the worker has stopped when Railway still permits access, and verify the copy with SQLite's integrity check.
+3. Record the active region and replica count, then stop the active deployment after the backup so the worker cannot write during cutover. Confirm the service has zero running replicas. For a single-region service, do not rely on removing its region override as a scale-to-zero operation; Railway can fall back to one replica in its default region. Take a second database copy after the worker has stopped when Railway still permits access, and verify the copy with SQLite's integrity check.
 4. Attach the volume at `/data`, set `DATA_DIR=/data`, and upload the backed-up database before restarting the worker. Railway CLI volume-file paths start at the volume root, so upload the database to `/bot.db`; it appears inside the service as `/data/bot.db`. Select the volume by its exact ID when using non-interactive file commands.
-5. Deploy the release and restore one replica. Startup applies numbered migrations; legacy profiles and tags are retained, while profiles that never made an explicit visibility choice migrate hidden.
-6. Check the deploy logs for successful command registration, migrations, and `ready` status. Run `scripts/verify-data.js` against the mounted database if Railway shell access is available.
+5. Produce one consistent SQLite snapshot before migration. If the source uses WAL, checkpoint it while stopped or use SQLite's backup API; copying only `bot.db` can omit committed WAL pages. Put the snapshot at `<staging-directory>/bot.db`, then point the migration command at that exact directory. In PowerShell, run `$env:DATA_DIR = '<staging-directory>'; npm run data:migrate`; in a POSIX shell, run `DATA_DIR='<staging-directory>' npm run data:migrate`. The command applies the same numbered migrations used at startup, writes a pre-migration backup, and reports aggregate row counts plus the SQLite integrity result. Legacy profiles and tags are retained, while profiles that never made an explicit visibility choice migrate hidden.
+6. Deploy the release and restore one replica. Startup safely rechecks the numbered migrations.
+7. Check the deploy logs for successful command registration, migrations, and `ready` status. Run `scripts/verify-data.js` against the mounted database if Railway shell access is available.
 
 Do not deploy while the volume is absent and assume the local filesystem will survive. Railway volumes persist across deploys and restarts, but they are a separate resource that must be attached to the service first. A volume is also a single-service resource, so this bot should not be scaled to multiple replicas.
 
 ## Backups
 
 Take a database backup before schema changes, before restoring an old copy, and before any rollback. A safe backup is a byte-for-byte copy of `/data/bot.db` made while the service is stopped or quiesced. Keep several dated copies outside the repository. Also back up `/data/profile-images` when it contains member uploads.
+
+For a one-time restore into a completely empty volume, `BOOTSTRAP_DB_GZIP_BASE64` may contain a gzip-compressed, base64-encoded SQLite database. Startup validates its SQLite header and integrity before installing it. It is ignored whenever `/data/bot.db` already exists, so it cannot replace live data. Remove the variable after the first verified start.
 
 After a deploy, verify both `PRAGMA integrity_check` and the expected database file size. A successful process start alone does not prove that member data is present.
 

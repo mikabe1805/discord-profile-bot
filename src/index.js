@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import { createBot } from './app.js';
+import { restoreDatabaseBootstrap } from './bootstrap-database.js';
 import { loadConfig } from './config.js';
 import { createStore } from './database.js';
 import { createMediaStore } from './media.js';
 import { registerCommands } from './register-commands.js';
 
 const config = loadConfig();
+restoreDatabaseBootstrap({ dataDir: config.dataDir });
 const store = createStore({ databasePath: config.databasePath });
 const integrity = store.integrityCheck();
 if (integrity.some((row) => row.integrity_check !== 'ok')) {

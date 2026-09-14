@@ -14,6 +14,7 @@
     "dev": "node --watch src/index.js",
     "commands:guild": "node src/deploy-commands.js guild",
     "commands:global": "node src/deploy-commands.js global",
+    "data:migrate": "node scripts/migrate-data.js",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
     "check": "node --check src/index.js && node --check src/app.js && node --check src/database.js && npm test"
