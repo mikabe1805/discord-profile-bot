@@ -1,17 +1,29 @@
 {
-    "name": "discord-profile-bot",
-    "version": "0.1.0",
-    "type": "module",
-    "main": "src/index.js",
-    "scripts": {
-        "start": "node src/index.js",
-        "dev": "node src/index.js",
-        "deploy:guild": "node src/deploy-commands.js guild",
-        "deploy:global": "node src/deploy-commands.js global"
-    },
-    "dependencies": {
-        "discord.js": "^14.16.3",
-        "dotenv": "^16.4.5",
-        "sql.js": "^1.13.0"
-    }
+  "name": "discord-profile-bot",
+  "version": "1.0.0",
+  "description": "A consent-first member directory for small Discord communities.",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:production": "node src/index.js --register-commands",
+    "dev": "node --watch src/index.js",
+    "commands:guild": "node src/deploy-commands.js guild",
+    "commands:global": "node src/deploy-commands.js global",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "check": "node --check src/index.js && node --check src/app.js && node --check src/database.js && npm test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
+  },
+  "overrides": {
+    "ws": "^8.21.0"
+  }
 }

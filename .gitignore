@@ -1,1 +1,10 @@
-/.env
+.env
+.env.*
+!.env.example
+
+node_modules/
+coverage/
+*.log
+
+data/*
+!data/.gitkeep

@@ -1,466 +1,82 @@
-import {
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle
-} from 'discord.js';
-import { upsertBoundaries, getBoundaries } from '../../db_sqlite.js';
-import { buildBoundariesEmbed } from './embed.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 
-const SECTION_ORDER = ['dms','humor','identity','emotional','debate','feedback','responses','misc'];
-
-const PRESETS = {
-  chill: {
-    dms: { unsolicited: 'yes', casual: 'yes' },
-    humor: { sarcasm: 'yes', edgy: 'ask', claiming: 'no' },
-    identity: { comments: 'ask', culture: 'ask' },
-    emotional: { light_public: 'yes', heavy_public: 'no', heavy_dm: 'ask' },
-    debate: { casual: 'yes', devils: 'ask', tone: 'spirited' },
-    feedback: { critique: 'ask', public_tag: 'ask' }
-  },
-  ask: {
-    dms: { unsolicited: 'ask', casual: 'ask' },
-    humor: { sarcasm: 'ask', edgy: 'ask', claiming: 'no' },
-    identity: { comments: 'ask', culture: 'ask' },
-    emotional: { light_public: 'ask', heavy_public: 'no', heavy_dm: 'ask' },
-    debate: { casual: 'ask', devils: 'ask', tone: 'calm' },
-    feedback: { critique: 'ask', public_tag: 'ask' }
-  },
-  conservative: {
-    dms: { unsolicited: 'no', casual: 'ask' },
-    humor: { sarcasm: 'ask', edgy: 'no', claiming: 'no' },
-    identity: { comments: 'no', culture: 'no' },
-    emotional: { light_public: 'ask', heavy_public: 'no', heavy_dm: 'no' },
-    debate: { casual: 'ask', devils: 'no', tone: 'calm' },
-    feedback: { critique: 'ask', public_tag: 'no' }
-  }
+const TTL = 20 * 60 * 1000;
+const SECTIONS = {
+  contact: ['new_dms', 'heavy_topics'], humor: ['teasing', 'dark_jokes'],
+  personal: ['identity_comments', 'emotional_topics'], conversation: ['debate', 'unsolicited_advice'],
+  feedback: ['critique', 'public_tags'], responses: ['response_preference'], other: ['notes']
 };
+const LABEL = { contact: 'Contact', humor: 'Humor', personal: 'Personal topics', conversation: 'Conversation', feedback: 'Feedback', responses: 'Response preferences', other: 'Other notes', new_dms: 'New DMs', heavy_topics: 'Heavy topics', teasing: 'Teasing or sarcasm', dark_jokes: 'Dark jokes', identity_comments: 'Identity or background comments', emotional_topics: 'Emotional topics', debate: 'Debate', unsolicited_advice: 'Unsolicited advice', critique: 'Critique', public_tags: 'Public tags', response_preference: 'When something misses the mark' };
+const FIELDS = Object.values(SECTIONS).flat().filter(k => !['notes', 'response_preference'].includes(k));
+const PRESETS = { open: Object.fromEntries(FIELDS.map(k => [k, 'comfortable'])), ask: Object.fromEntries(FIELDS.map(k => [k, 'ask_first'])), lowkey: Object.fromEntries(FIELDS.map(k => [k, 'not_comfortable'])) };
+const clone = value => JSON.parse(JSON.stringify(value || {}));
+const id = i => `${i.guildId}:${i.user.id}`;
+const values = [{ label: 'Comfortable', value: 'comfortable', emoji: '🙂' }, { label: 'Ask first', value: 'ask_first', emoji: '💬' }, { label: 'Not comfortable', value: 'not_comfortable', emoji: '⛔' }];
 
-const VALUE_CHOICES = [
-  { label: '✅ Comfortable', value: 'yes' },
-  { label: '⚠️ Ask First', value: 'ask' },
-  { label: '⛔ Not Comfortable', value: 'no' }
-];
-
-export async function startBoundariesWizard(interaction, { preset }) {
-  const existing = await getBoundaries(interaction.guildId, interaction.user.id);
-  const base = preset ? (PRESETS[preset] || {}) : (existing?.data || {});
-  // enforce fixed rule on base
-  if (!base.emotional) base.emotional = {};
-  base.emotional.heavy_public = 'no';
-  await upsertBoundaries(interaction.guildId, interaction.user.id, base);
-  await interaction.reply({ content: 'Boundaries setup', flags: 64, components: [templateRow(preset), ...sectionPickerRows()], embeds: [] });
+function normalize(data) {
+  const source = clone(data); const out = {};
+  const old = { 'dms.unsolicited': 'new_dms', 'dms.casual': 'new_dms', 'humor.sarcasm': 'teasing', 'humor.edgy': 'dark_jokes', 'identity.comments': 'identity_comments', 'identity.culture': 'identity_comments', 'emotional.heavy_dm': 'heavy_topics', 'emotional.light_public': 'emotional_topics', 'debate.casual': 'debate', 'debate.devils': 'debate', 'feedback.critique': 'critique', 'feedback.public_tag': 'public_tags' };
+  for (const [path, field] of Object.entries(old)) { const [section, key] = path.split('.'); if (source?.[section]?.[key] !== undefined && out[field] === undefined) out[field] = oldValue(source[section][key]); }
+  for (const field of [...FIELDS, 'response_preference', 'notes']) if (source[field] !== undefined) out[field] = oldValue(source[field]);
+  if (!out.notes) out.notes = Object.values(source).find(v => v && typeof v === 'object' && (v.notes || v.text))?.notes || Object.values(source).find(v => v && typeof v === 'object' && v.text)?.text;
+  return out;
 }
+function oldValue(value) { return value === 'yes' ? 'comfortable' : value === 'ask' ? 'ask_first' : value === 'no' ? 'not_comfortable' : value; }
+function sectionFor(field) { return Object.entries(SECTIONS).find(([, fields]) => fields.includes(field))?.[0] || 'other'; }
+async function reply(i, content) { return (i.replied || i.deferred) ? i.followUp({ content, flags: 64 }) : i.reply({ content, flags: 64 }); }
 
-function templateRow(selected) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId('bdry:template')
-    .setPlaceholder('Choose a template (optional)')
-    .addOptions(
-      { label: 'Start blank', value: 'blank', default: !selected },
-      { label: '🧊 Chill', value: 'chill', default: selected === 'chill' },
-      { label: '❓ Ask-First', value: 'ask', default: selected === 'ask' },
-      { label: '🛡️ Conservative', value: 'conservative', default: selected === 'conservative' }
-    );
-  return new ActionRowBuilder().addComponents(menu);
-}
-
-function sectionPickerRows() {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId('bdry:section')
-    .setPlaceholder('Pick a section to edit')
-    .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(
-      { label: '1) DMs & Contact', value: 'dms' },
-      { label: '2) Humor & Tone', value: 'humor' },
-      { label: '3) Identity & Background', value: 'identity' },
-      { label: '4) Emotional Topics', value: 'emotional' },
-      { label: '5) Debate & Conflict', value: 'debate' },
-      { label: '6) Feedback & Criticism', value: 'feedback' },
-      { label: '7) Boundary Responses', value: 'responses' },
-      { label: '8) Anything Else?', value: 'misc' }
-    );
-  const save = new ButtonBuilder().setCustomId('bdry:preview').setStyle(ButtonStyle.Primary).setLabel('Preview + Save');
-  return [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(save)];
-}
-
-export async function handleBoundariesComponent(interaction) {
-  const [prefix, action, ...rest] = interaction.customId.split(':');
-  if (action === 'template') {
-    const choice = interaction.values?.[0];
-    if (choice && choice !== 'blank') {
-      const base = PRESETS[choice] || {};
-      if (!base.emotional) base.emotional = {};
-      base.emotional.heavy_public = 'no';
-      await upsertBoundaries(interaction.guildId, interaction.user.id, base);
-    } else {
-      await upsertBoundaries(interaction.guildId, interaction.user.id, {});
-    }
-    await interaction.update({ content: choice === 'blank' ? 'Starting blank.' : `Preset applied: ${choice}`, components: [templateRow(choice), ...sectionPickerRows()] });
-    return;
-  }
-  if (action === 'section') {
-    const section = interaction.values?.[0];
-    await showSection(interaction, section);
-    return;
-  }
-  if (action === 'preview') {
-    await previewAndSave(interaction);
-    return;
-  }
-  if (action === 'quick') {
-    const section = rest[0];
-    const value = rest[1]; // yes | ask | no
-    await applyQuick(interaction, section, value);
-    return;
-  }
-  if (action === 'toggle') {
-    const ownerId = rest[0];
-    const cur = rest[1] === '1';
-    const entry = await getBoundaries(interaction.guildId, ownerId);
-    const payload = await buildBoundariesEmbed({ guild: interaction.guild, viewerId: interaction.user.id, ownerId, data: entry?.data || {}, detailed: !cur });
-    await interaction.update(payload);
-    return;
-  }
-  if (action === 'report') {
-    const ownerId = rest[0];
-    const chanId = process.env.BOUNDARIES_REPORT_CHANNEL_ID;
-    if (chanId) {
-      const chan = interaction.guild.channels.cache.get(chanId) || await interaction.guild.channels.fetch(chanId).catch(() => null);
-      if (chan) await chan.send(`Report: <@${interaction.user.id}> reported misuse on <@${ownerId}>'s Boundaries Card.`);
-    }
-    await interaction.reply({ content: '📨 Report submitted to moderators.', flags: 64 });
-    return;
-  }
-}
-
-async function showSection(interaction, section) {
-  // Build section UI with selects/buttons and a notes button
-  const rows = [];
-  const entry = await getBoundaries(interaction.guildId, interaction.user.id);
-  const summary = buildProgressSummary(entry?.data || {});
-  if (section === 'dms') {
-    rows.push(optionRow('bdry:set:dms:unsolicited', 'Receiving unsolicited DMs'));
-    rows.push(optionRow('bdry:set:dms:casual', 'Starting casual 1-on-1'));
-  } else if (section === 'humor') {
-    rows.push(optionRow('bdry:set:humor:sarcasm', 'Sarcasm or teasing'));
-    rows.push(optionRow('bdry:set:humor:edgy', 'Edgy/dark jokes'));
-    rows.push(optionRowRestricted('bdry:set:humor:claiming', '“Claiming” bigotry jokes', [
-      { label: '⚠️ Ask First', value: 'ask' },
-      { label: '⛔ Not Comfortable', value: 'no' }
-    ]));
-  } else if (section === 'identity') {
-    rows.push(optionRowRestricted('bdry:set:identity:comments', 'Comments on gender/sexuality/religion/ethnicity', [
-      { label: '⚠️ Ask First', value: 'ask' },
-      { label: '⛔ Not Comfortable', value: 'no' }
-    ]));
-    rows.push(optionRowRestricted('bdry:set:identity:culture', 'Critique/jokes about my country/region/culture', [
-      { label: '⚠️ Ask First', value: 'ask' },
-      { label: '⛔ Not Comfortable', value: 'no' }
-    ]));
-  } else if (section === 'emotional') {
-    rows.push(optionRow('bdry:set:emotional:light_public', 'Light venting in public'));
-    // heavy_public fixed as no; do not render control
-    rows.push(optionRow('bdry:set:emotional:heavy_dm', 'Receiving heavy topics in DMs'));
-  } else if (section === 'debate') {
-    rows.push(optionRow('bdry:set:debate:casual', 'Casual debate in general'));
-    rows.push(optionRow('bdry:set:debate:devils', '“Devil’s advocate” on my posts'));
-    rows.push(toneRow('bdry:set:debate:tone', 'Tone I’m comfortable with'));
-  } else if (section === 'feedback') {
-    rows.push(optionRow('bdry:set:feedback:critique', 'Unsolicited critique'));
-    rows.push(optionRow('bdry:set:feedback:public_tag', 'Publicly @ me for feedback'));
-  } else if (section === 'responses') {
-    rows.push(responsesRow('bdry:set:responses:actions', 'If my boundaries are crossed, I usually…'));
-  } else if (section === 'misc') {
-    // Only notes
-  }
-  // Add quick answers + notes for most sections
-  if (section !== 'responses' && section !== 'misc') {
-    rows.push(quickNotesRow(section));
-  } else {
-    const notesBtn = new ButtonBuilder().setCustomId(`bdry:notes:${section}`).setStyle(ButtonStyle.Secondary).setLabel('Add/Edit notes');
-    rows.push(new ActionRowBuilder().addComponents(notesBtn));
-  }
-  rows.push(navRow(section));
-  await interaction.update({ content: `${summary}\nEditing section: ${prettySection(section)}`, components: rows });
-}
-
-function optionRow(customId, label) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder(label)
-    .addOptions(VALUE_CHOICES);
-  return new ActionRowBuilder().addComponents(menu);
-}
-
-function optionRowRestricted(customId, label, options) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder(label)
-    .addOptions(options);
-  return new ActionRowBuilder().addComponents(menu);
-}
-
-function toneRow(customId, label) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder(label)
-    .addOptions(
-      { label: 'Calm only', value: 'calm' },
-      { label: 'Spirited is okay', value: 'spirited' },
-      { label: 'Avoid debate with me', value: 'avoid' }
-    );
-  return new ActionRowBuilder().addComponents(menu);
-}
-
-function responsesRow(customId, label) {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder(label)
-    .setMinValues(1)
-    .setMaxValues(3)
-    .addOptions(
-      { label: 'Speak to the person directly', value: 'speak' },
-      { label: 'Quietly disengage', value: 'disengage' },
-      { label: 'Contact a moderator myself', value: 'mod' }
-    );
-  return new ActionRowBuilder().addComponents(menu);
-}
-
-export async function handleBoundariesModal(interaction) {
-  const [_, action, section] = interaction.customId.split(':');
-  if (action !== 'notes') return;
-  const text = interaction.fields.getTextInputValue('bdry:notes:text')?.slice(0, 140) || '';
-  const existing = (await getBoundaries(interaction.guildId, interaction.user.id))?.data || {};
-  existing[section] = Object.assign({}, existing[section], { notes: text });
-  await upsertBoundaries(interaction.guildId, interaction.user.id, existing);
-  await interaction.reply({ content: 'Notes saved.', flags: 64 });
-}
-
-async function previewAndSave(interaction) {
-  // Just show current stored data
-  const entry = await getBoundaries(interaction.guildId, interaction.user.id);
-  const payload = await buildBoundariesEmbed({ guild: interaction.guild, viewerId: interaction.user.id, ownerId: interaction.user.id, data: entry?.data || {}, detailed: true });
-  // Add a save button
-  await interaction.update(payload);
-}
-
-// Handle menu selections that set values or open notes modal
-export async function handleBoundariesValue(interaction) {
-  const parts = interaction.customId.split(':');
-  // bdry:set:section:key OR bdry:set:responses:actions
-  if (parts[1] !== 'set') return;
-  const section = parts[2];
-  const key = parts[3];
-  const existing = (await getBoundaries(interaction.guildId, interaction.user.id))?.data || {};
-  if (section === 'responses' && key === 'actions') {
-    existing.responses = Object.assign({}, existing.responses, { actions: interaction.values });
-  } else if (section === 'debate' && key === 'tone') {
-    existing.debate = Object.assign({}, existing.debate, { tone: interaction.values?.[0] });
-  } else {
-    const v = interaction.values?.[0];
-    if (section === 'humor' && key === 'claiming' && v === 'yes') {
-      // Disallow opting into hate speech/slurs
-      await interaction.deferUpdate();
-      return;
-    }
-    // non-editable rule: hate speech opt-in not allowed → already enforced by absence
-    if (section === 'emotional' && key === 'heavy_public') {
-      // ignore attempts
-    } else {
-      existing[section] = Object.assign({}, existing[section], { [key]: v });
-    }
-  }
-  // enforce fixed rule
-  if (!existing.emotional) existing.emotional = {};
-  existing.emotional.heavy_public = 'no';
-  await upsertBoundaries(interaction.guildId, interaction.user.id, existing);
-  await interaction.deferUpdate();
-}
-
-// Entry for all component interactions (selects/buttons)
-export async function handleBoundariesComponentRouter(interaction) {
-  const id = interaction.customId;
-  if (id.startsWith('bdry:set:')) return handleBoundariesValue(interaction);
-  if (id.startsWith('bdry:notes:')) return openNotesModal(interaction, id.split(':')[2]);
-  if (id.startsWith('bdry:nav:')) return handleBoundariesNav(interaction);
-  return handleBoundariesComponent(interaction);
-}
-
-async function openNotesModal(interaction, section) {
-  const modal = new ModalBuilder()
-    .setCustomId(`bdry:notes:${section}`)
-    .setTitle('Section notes (140 chars max)');
-  const input = new TextInputBuilder()
-    .setCustomId('bdry:notes:text')
-    .setLabel('Notes')
-    .setRequired(false)
-    .setStyle(TextInputStyle.Paragraph)
-    .setMaxLength(140);
-  modal.addComponents(new ActionRowBuilder().addComponents(input));
-  await interaction.showModal(modal);
-}
-
-function quickNotesRow(section) {
-  const yes = new ButtonBuilder().setCustomId(`bdry:quick:${section}:yes`).setStyle(ButtonStyle.Success).setLabel('✅ All comfortable');
-  const ask = new ButtonBuilder().setCustomId(`bdry:quick:${section}:ask`).setStyle(ButtonStyle.Secondary).setLabel('⚠️ Ask first');
-  const no = new ButtonBuilder().setCustomId(`bdry:quick:${section}:no`).setStyle(ButtonStyle.Danger).setLabel('⛔ Not comfortable');
-  const notes = new ButtonBuilder().setCustomId(`bdry:notes:${section}`).setStyle(ButtonStyle.Secondary).setLabel('Add/Edit notes');
-  return new ActionRowBuilder().addComponents(yes, ask, no, notes);
-}
-
-async function applyQuick(interaction, section, value) {
-  const existing = (await getBoundaries(interaction.guildId, interaction.user.id))?.data || {};
-  const set = (sec, key, v) => {
-    if (!existing[sec]) existing[sec] = {};
-    existing[sec][key] = v;
+export function createBoundariesController({ store, now = () => Date.now() }) {
+  const drafts = new Map();
+  const current = interaction => {
+    const draft = drafts.get(id(interaction));
+    if (!draft || now() - draft.startedAt > TTL) { drafts.delete(id(interaction)); return null; }
+    return draft;
   };
-  const mapAllowed = (allowedYes) => (value === 'yes' ? (allowedYes ? 'yes' : 'ask') : value);
-  switch (section) {
-    case 'dms':
-      set('dms', 'unsolicited', mapAllowed(true));
-      set('dms', 'casual', mapAllowed(true));
-      break;
-    case 'humor':
-      set('humor', 'sarcasm', mapAllowed(true));
-      set('humor', 'edgy', mapAllowed(true));
-      // claiming cannot be 'yes'
-      set('humor', 'claiming', value === 'no' ? 'no' : 'ask');
-      break;
-    case 'identity':
-      // only ask/no permitted
-      set('identity', 'comments', value === 'no' ? 'no' : 'ask');
-      set('identity', 'culture', value === 'no' ? 'no' : 'ask');
-      break;
-    case 'emotional':
-      set('emotional', 'light_public', mapAllowed(true));
-      set('emotional', 'heavy_dm', mapAllowed(true));
-      break;
-    case 'debate':
-      set('debate', 'casual', mapAllowed(true));
-      set('debate', 'devils', mapAllowed(true));
-      // tone unchanged
-      break;
-    case 'feedback':
-      set('feedback', 'critique', mapAllowed(true));
-      set('feedback', 'public_tag', mapAllowed(true));
-      break;
-    default:
-      break;
+  const controls = owner => new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`bdry:save:${owner}`).setStyle(ButtonStyle.Success).setLabel('Save'), new ButtonBuilder().setCustomId(`bdry:cancel:${owner}`).setStyle(ButtonStyle.Secondary).setLabel('Cancel'));
+  const hub = owner => [
+    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('bdry:preset').setPlaceholder('Optional starting point').addOptions([{ label: 'Open', value: 'open' }, { label: 'Ask first', value: 'ask' }, { label: 'Low-key', value: 'lowkey' }])),
+    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('bdry:section').setPlaceholder('Choose a section').addOptions(Object.keys(SECTIONS).map(value => ({ label: LABEL[value], value })))),
+    controls(owner)
+  ];
+  async function startEdit(interaction, { preset } = {}) {
+    const saved = await store.getBoundaries(interaction.guildId, interaction.user.id);
+    const draft = {
+      ownerId: interaction.user.id,
+      startedAt: now(),
+      data: preset ? clone(PRESETS[preset] || {}) : normalize(saved?.data || saved || {}),
+      privacy: saved ? { level: saved.privacy_level, roleId: saved.privacy_role_id } : undefined,
+    };
+    drafts.set(id(interaction), draft);
+    await interaction.reply({ content: 'Your interaction notes stay private until you press Save. Choose only what helps people treat you well; blanks are okay.', components: hub(draft.ownerId), flags: 64 });
   }
-  // enforce fixed rule
-  if (!existing.emotional) existing.emotional = {};
-  existing.emotional.heavy_public = 'no';
-  await upsertBoundaries(interaction.guildId, interaction.user.id, existing);
-  // refresh section UI
-  await showSection(interaction, section);
-}
-
-function buildProgressSummary(data) {
-  const parts = [];
-  for (const key of SECTION_ORDER) {
-    const st = sectionStatus(key, data[key] || {});
-    parts.push(`${shortName(key)} ${st}`);
+  async function handleComponent(interaction) {
+    const draft = current(interaction);
+    const [, action, ownerId, field] = interaction.customId.split(':');
+    if (!draft) return reply(interaction, 'This editing session expired. Run `/boundaries edit` to start again.');
+    if (ownerId && ownerId !== interaction.user.id) return reply(interaction, 'That control belongs to someone else’s draft.');
+    if (action === 'preset') { draft.data = clone(PRESETS[interaction.values?.[0]] || {}); return interaction.update({ content: 'Preset added to your unsaved draft. You can change anything below.', components: hub(draft.ownerId) }); }
+    if (action === 'section') return showSection(interaction, draft, interaction.values?.[0]);
+    if (action === 'value') { draft.data[field] = interaction.values?.[0]; return showSection(interaction, draft, sectionFor(field)); }
+    if (action === 'notes') return notes(interaction, draft);
+    if (action === 'save') { await store.saveBoundaries(interaction.guildId, interaction.user.id, clone(draft.data), draft.privacy); drafts.delete(id(interaction)); return interaction.update({ content: 'Saved. Thanks for making the kind of interaction you want clearer.', components: [], embeds: [] }); }
+    if (action === 'cancel') { drafts.delete(id(interaction)); return interaction.update({ content: 'Discarded your unsaved changes.', components: [], embeds: [] }); }
   }
-  return `Summary: ${parts.join(' • ')}`;
-}
-
-function sectionStatus(section, s) {
-  const mark = (n, total) => (n >= total ? '✅' : (n > 0 ? '⚠️' : '•'));
-  switch (section) {
-    case 'dms': {
-      const n = Number(Boolean(s.unsolicited)) + Number(Boolean(s.casual));
-      return mark(n, 2);
-    }
-    case 'humor': {
-      const n = Number(Boolean(s.sarcasm)) + Number(Boolean(s.edgy)) + Number(Boolean(s.claiming));
-      return mark(n, 3);
-    }
-    case 'identity': {
-      const n = Number(Boolean(s.comments)) + Number(Boolean(s.culture));
-      return mark(n, 2);
-    }
-    case 'emotional': {
-      const n = Number(Boolean(s.light_public)) + Number(Boolean(s.heavy_dm));
-      return mark(n, 2);
-    }
-    case 'debate': {
-      const n = Number(Boolean(s.casual)) + Number(Boolean(s.devils)) + Number(Boolean(s.tone));
-      return mark(n, 3);
-    }
-    case 'feedback': {
-      const n = Number(Boolean(s.critique)) + Number(Boolean(s.public_tag));
-      return mark(n, 2);
-    }
-    case 'responses': {
-      const n = Array.isArray(s.actions) && s.actions.length ? 1 : 0;
-      return mark(n, 1);
-    }
-    case 'misc': {
-      const n = s.notes || s.text ? 1 : 0;
-      return mark(n, 1);
-    }
+  async function handleModal(interaction) {
+    const draft = current(interaction); const [, action, ownerId] = interaction.customId.split(':');
+    if (action !== 'notes' || !draft || ownerId !== interaction.user.id) return reply(interaction, 'This editing session is no longer active.');
+    draft.data.notes = (interaction.fields.getTextInputValue('bdry:notes:text') || '').slice(0, 200);
+    await interaction.reply({ content: 'Added to your unsaved draft. Choose Save when you are ready.', flags: 64 });
   }
-  return '•';
-}
-
-function shortName(key) {
-  switch (key) {
-    case 'dms': return 'DMs';
-    case 'humor': return 'Humor';
-    case 'identity': return 'ID';
-    case 'emotional': return 'Emo';
-    case 'debate': return 'Debate';
-    case 'feedback': return 'Feedback';
-    case 'responses': return 'Resp';
-    case 'misc': return 'Misc';
-    default: return key;
+  async function showSection(interaction, draft, section) {
+    const rows = (SECTIONS[section] || []).filter(k => k !== 'notes').map(field => new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`bdry:value:${draft.ownerId}:${field}`).setPlaceholder(LABEL[field]).addOptions(values)));
+    rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`bdry:notes:${draft.ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Add a note')));
+    rows.push(controls(draft.ownerId));
+    await interaction.update({ content: `${LABEL[section] || 'Notes'} — blanks mean no preference was shared.`, components: rows, embeds: [] });
   }
-}
-
-function prettySection(key) {
-  switch (key) {
-    case 'dms': return 'DMs & Contact';
-    case 'humor': return 'Humor & Tone';
-    case 'identity': return 'Identity & Background';
-    case 'emotional': return 'Emotional Topics';
-    case 'debate': return 'Debate & Conflict';
-    case 'feedback': return 'Feedback & Criticism';
-    case 'responses': return 'Boundary Responses';
-    case 'misc': return 'Anything Else?';
-    default: return key;
+  async function notes(interaction, draft) {
+    const input = new TextInputBuilder().setCustomId('bdry:notes:text').setLabel('Anything else people should know?').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(200);
+    if (draft.data.notes) input.setValue(draft.data.notes);
+    await interaction.showModal(new ModalBuilder().setCustomId(`bdry:notes:${draft.ownerId}`).setTitle('Other notes').addComponents(new ActionRowBuilder().addComponents(input)));
   }
+  return { startEdit, handleComponent, handleModal, hasActiveDraft: interaction => Boolean(current(interaction)) };
 }
-
-function navRow(section) {
-  const idx = SECTION_ORDER.indexOf(section);
-  const prev = SECTION_ORDER[(idx - 1 + SECTION_ORDER.length) % SECTION_ORDER.length];
-  const next = SECTION_ORDER[(idx + 1) % SECTION_ORDER.length];
-  const prevBtn = new ButtonBuilder().setCustomId(`bdry:nav:prev:${prev}`).setStyle(ButtonStyle.Secondary).setLabel('◀ Previous');
-  const listBtn = new ButtonBuilder().setCustomId('bdry:nav:list').setStyle(ButtonStyle.Secondary).setLabel('Section list');
-  const nextBtn = new ButtonBuilder().setCustomId(`bdry:nav:next:${next}`).setStyle(ButtonStyle.Secondary).setLabel(idx === SECTION_ORDER.length - 1 ? 'Next ▶ (Preview)' : 'Next ▶');
-  const previewBtn = new ButtonBuilder().setCustomId('bdry:preview').setStyle(ButtonStyle.Primary).setLabel('Preview + Save');
-  return new ActionRowBuilder().addComponents(prevBtn, listBtn, nextBtn, previewBtn);
-}
-
-async function handleBoundariesNav(interaction) {
-  const parts = interaction.customId.split(':');
-  const action = parts[2];
-  if (action === 'list') {
-    await interaction.update({ content: 'Boundaries setup', components: [templateRow(null), ...sectionPickerRows()] });
-    return;
-  }
-  const target = parts[3];
-  if (action === 'next' && parts[3] === 'misc') {
-    // move to preview when hitting next after Misc
-    await previewAndSave(interaction);
-    return;
-  }
-  await showSection(interaction, target);
-}
-
-
