@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -25,6 +26,7 @@ import { buildBoundariesEmbed } from './modules/boundaries/embed.js';
 import { createBoundariesController } from './modules/boundaries/wizard.js';
 import { CARD_ART_PRESETS, getCardArtPreset, markerForCardArt, presetForCardArtMarker } from './profile-presets.js';
 import { PROFILE_VIBES, getProfileVibe } from './profile-vibes.js';
+import { STARTER_PACKS, getStarterPack } from './starter-packs.js';
 
 const PRIVATE = MessageFlags.Ephemeral;
 const NO_MENTIONS = Object.freeze({ parse: [], repliedUser: false });
@@ -79,13 +81,6 @@ const PATHS = Object.freeze({
   make: { label: 'Make things together', description: 'Creative projects and useful feedback', openTo: 'creative projects, collaboration, and sharing feedback' },
   study: { label: 'Study together', description: 'Study sessions and project help', openTo: 'study sessions, project help, and accountability' },
   card: { label: 'Just make my card', description: 'Start private and decide the rest later', openTo: '' },
-});
-
-const STARTER_PACKS = Object.freeze({
-  community: ['Introductions', 'Local events', 'Food', 'Music'],
-  study: ['Study buddies', 'Homework', 'Project help', 'Accountability'],
-  creative: ['Art', 'Writing', 'Photography', 'Music making'],
-  gaming: ['Co-op games', 'Board games', 'RPGs', 'Game nights'],
 });
 
 function homeRows(ownerId, { hasProfile = true } = {}) {
@@ -203,8 +198,7 @@ function titleModal(ownerId, currentTitle = '') {
 function setupRows(ownerId) {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder().setCustomId(`setup:pack:${ownerId}`).setPlaceholder('Add a starter interest pack')
-        .addOptions(Object.keys(STARTER_PACKS).map((value) => ({ label: `${value[0].toUpperCase()}${value.slice(1)} pack`, value }))),
+      new ButtonBuilder().setCustomId(`setup:packs:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Review starter tags'),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`setup:add:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Add interests'),
@@ -217,6 +211,94 @@ function setupRows(ownerId) {
       new ButtonBuilder().setCustomId(`setup:post:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Post start card here'),
     ),
   ];
+}
+
+function starterPackSummary(pack) {
+  return pack.interests.map((interest) => interest.name).join(' · ');
+}
+
+function starterPackPickerEmbed() {
+  return new EmbedBuilder()
+    .setColor(0x786752)
+    .setTitle('Starter tag suggestions')
+    .setDescription('Open a group to review its tags. Nothing is selected or added until you choose tags and press **Add selected**.')
+    .addFields(STARTER_PACKS.map((pack) => ({
+      name: pack.name,
+      value: starterPackSummary(pack),
+      inline: false,
+    })));
+}
+
+function starterPackPickerRows(ownerId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`setup:pack:${ownerId}`)
+        .setPlaceholder('Open a group of suggestions')
+        .addOptions(STARTER_PACKS.map((pack) => ({
+          label: pack.name,
+          description: starterPackSummary(pack),
+          value: pack.id,
+        }))),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`setup:home:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to setup'),
+    ),
+  ];
+}
+
+function starterPackReviewEmbed(pack, selectedSlugs, existingSlugs) {
+  const lines = pack.interests.map((interest) => {
+    if (existingSlugs.has(interest.slug)) return `• ${interest.name} — already in this server`;
+    if (selectedSlugs.has(interest.slug)) return `• **${interest.name} — selected**`;
+    return `• ${interest.name}`;
+  });
+  return new EmbedBuilder()
+    .setColor(0x786752)
+    .setTitle(`Choose from ${pack.name}`)
+    .setDescription('Select only what fits this server. Existing tags stay untouched, and nothing changes until you press **Add selected**.')
+    .addFields({ name: 'Tags in this group', value: lines.join('\n') });
+}
+
+function starterPackReviewRows(ownerId, draftId, pack, selectedSlugs, existingSlugs) {
+  const available = pack.interests.filter((interest) => !existingSlugs.has(interest.slug));
+  const rows = [];
+  if (available.length) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`setup:pick:${ownerId}:${draftId}`)
+        .setPlaceholder('Choose the tags that fit this server')
+        .setMinValues(0)
+        .setMaxValues(available.length)
+        .addOptions(available.map((interest) => ({
+          label: interest.name,
+          value: interest.slug,
+          default: selectedSlugs.has(interest.slug),
+        }))),
+    ));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`setup:apply:${ownerId}:${draftId}`)
+      .setStyle(ButtonStyle.Primary)
+      .setLabel(`Add ${selectedSlugs.size} selected`)
+      .setDisabled(selectedSlugs.size === 0),
+    new ButtonBuilder()
+      .setCustomId(`setup:all:${ownerId}:${draftId}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel('Select all')
+      .setDisabled(!available.length || selectedSlugs.size === available.length),
+    new ButtonBuilder()
+      .setCustomId(`setup:clear:${ownerId}:${draftId}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel('Clear')
+      .setDisabled(selectedSlugs.size === 0),
+  ));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`setup:back:${ownerId}:${draftId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to suggestions'),
+    new ButtonBuilder().setCustomId(`setup:cancel:${ownerId}:${draftId}`).setStyle(ButtonStyle.Secondary).setLabel('Cancel'),
+  ));
+  return rows;
 }
 
 function setupInterestsModal(action, ownerId) {
@@ -350,9 +432,44 @@ function requireManageGuild(interaction) {
   }
 }
 
-export function createInteractionHandler({ store, media, connections, gather, boundaries, logger = console }) {
+export function createInteractionHandler({ store, media, connections, gather, boundaries, logger = console, now = () => new Date() }) {
   const invitationDrafts = new Map();
+  const tagPackDrafts = new Map();
   let invitationDraftSequence = 0;
+
+  function currentTimeMs() {
+    const value = now();
+    const milliseconds = value instanceof Date ? value.getTime() : Number(value);
+    if (!Number.isFinite(milliseconds)) throw new TypeError('The current time is unavailable.');
+    return milliseconds;
+  }
+
+  function clearTagPackDrafts(ownerId, guildId) {
+    const time = currentTimeMs();
+    for (const [draftId, draft] of tagPackDrafts) {
+      if (draft.expiresAt <= time || (draft.ownerId === ownerId && draft.guildId === guildId)) tagPackDrafts.delete(draftId);
+    }
+  }
+
+  function requireTagPackDraft(interaction, ownerId, draftId) {
+    const draft = draftId ? tagPackDrafts.get(draftId) : null;
+    if (!draft || draft.expiresAt <= currentTimeMs()) {
+      if (draftId) tagPackDrafts.delete(draftId);
+      throw new RangeError('That tag review expired. Open the starter suggestions again.');
+    }
+    if (draft.ownerId !== ownerId || draft.guildId !== interaction.guildId) {
+      throw new RangeError('That tag review belongs to a different setup panel.');
+    }
+    if (!getStarterPack(draft.packId)) {
+      tagPackDrafts.delete(draftId);
+      throw new RangeError('That group of tag suggestions is no longer available.');
+    }
+    return draft;
+  }
+
+  function existingStarterPackSlugs(guildId, pack) {
+    return new Set(pack.interests.filter((interest) => store.getTag(guildId, interest.slug)).map((interest) => interest.slug));
+  }
   async function handleAutocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
     const pieces = String(focused.value || '').split(',');
@@ -910,7 +1027,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     const shownTags = tags.slice(0, 30).map((tag) => safeDisplayText(tag.display_name, { maxLength: 70 }));
     const tagSummary = shownTags.length
       ? `${shownTags.join(' · ')}${tags.length > shownTags.length ? ` · +${tags.length - shownTags.length} more` : ''}`
-      : 'None yet. Add a starter pack or your own names below.';
+      : 'None yet. Review starter suggestions or add your own names below.';
     return new EmbedBuilder().setColor(0x786752).setTitle('Set up Bio')
       .setDescription('Give people a clear, low-pressure way to make a card and find each other. These controls only affect this server.')
       .addFields(
@@ -931,28 +1048,103 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     });
   }
 
+  function starterPackPickerPayload(ownerId) {
+    return withNoMentions({
+      embeds: [starterPackPickerEmbed()],
+      components: starterPackPickerRows(ownerId),
+    });
+  }
+
+  function starterPackReviewPayload(interaction, draftId, draft) {
+    const pack = getStarterPack(draft.packId);
+    const existingSlugs = existingStarterPackSlugs(interaction.guildId, pack);
+    for (const slug of draft.selectedSlugs) if (existingSlugs.has(slug)) draft.selectedSlugs.delete(slug);
+    return withNoMentions({
+      embeds: [starterPackReviewEmbed(pack, draft.selectedSlugs, existingSlugs)],
+      components: starterPackReviewRows(draft.ownerId, draftId, pack, draft.selectedSlugs, existingSlugs),
+    });
+  }
+
   async function handleSetup(interaction) {
     requireManageGuild(interaction);
     return privateReply(interaction, setupPayload(interaction));
   }
 
   async function handleSetupComponent(interaction) {
-    const [, action, ownerId] = interaction.customId.split(':');
+    const [, action, ownerId, draftId] = interaction.customId.split(':');
     if (ownerId !== interaction.user.id) throw new RangeError('That setup panel belongs to someone else.');
     requireManageGuild(interaction);
     if (action === 'add' || action === 'remove') return interaction.showModal(setupInterestsModal(action, ownerId));
     if (action === 'limit') {
       return interaction.showModal(setupLimitModal(ownerId, store.getGuildSettings(interaction.guildId).max_tags_per_user));
     }
+    if (action === 'packs') {
+      clearTagPackDrafts(ownerId, interaction.guildId);
+      return interaction.update(starterPackPickerPayload(ownerId));
+    }
+    if (action === 'home') {
+      clearTagPackDrafts(ownerId, interaction.guildId);
+      return interaction.update(setupPayload(interaction));
+    }
     if (action === 'pack') {
-      const pack = interaction.values?.[0];
-      const interests = STARTER_PACKS[pack];
-      if (!interests) throw new RangeError('Choose a valid starter pack.');
-      for (const displayName of interests) {
-        const slug = normalizeInterestSlug(displayName);
-        if (!store.getTag(interaction.guildId, slug)) store.addTag(interaction.guildId, slug, displayName, interaction.user.id, pack, { bypassUgc: true });
+      const pack = getStarterPack(interaction.values?.[0]);
+      if (!pack) throw new RangeError('Choose a valid group of tag suggestions.');
+      clearTagPackDrafts(ownerId, interaction.guildId);
+      const id = randomUUID().replaceAll('-', '').slice(0, 12);
+      const draft = {
+        ownerId,
+        guildId: interaction.guildId,
+        packId: pack.id,
+        selectedSlugs: new Set(),
+        expiresAt: currentTimeMs() + (15 * 60 * 1000),
+      };
+      tagPackDrafts.set(id, draft);
+      return interaction.update(starterPackReviewPayload(interaction, id, draft));
+    }
+    if (['pick', 'all', 'clear', 'back', 'cancel', 'apply'].includes(action)) {
+      const draft = requireTagPackDraft(interaction, ownerId, draftId);
+      const pack = getStarterPack(draft.packId);
+      const offeredSlugs = new Set(pack.interests.map((interest) => interest.slug));
+      const existingSlugs = existingStarterPackSlugs(interaction.guildId, pack);
+      if (action === 'pick') {
+        const selected = [...new Set(interaction.values || [])];
+        if (selected.some((slug) => !offeredSlugs.has(slug))) throw new RangeError('Choose tags from this suggestion group only.');
+        if (selected.some((slug) => existingSlugs.has(slug))) throw new RangeError('One of those tags is already in this server. Refresh the suggestions and try again.');
+        draft.selectedSlugs = new Set(selected);
+        return interaction.update(starterPackReviewPayload(interaction, draftId, draft));
       }
-      return interaction.update(setupPayload(interaction, `Added the ${pack} starter pack. Existing interests were left alone.`));
+      if (action === 'all') {
+        draft.selectedSlugs = new Set(pack.interests.filter((interest) => !existingSlugs.has(interest.slug)).map((interest) => interest.slug));
+        return interaction.update(starterPackReviewPayload(interaction, draftId, draft));
+      }
+      if (action === 'clear') {
+        draft.selectedSlugs.clear();
+        return interaction.update(starterPackReviewPayload(interaction, draftId, draft));
+      }
+      if (action === 'back') {
+        tagPackDrafts.delete(draftId);
+        return interaction.update(starterPackPickerPayload(ownerId));
+      }
+      if (action === 'cancel') {
+        tagPackDrafts.delete(draftId);
+        return interaction.update(setupPayload(interaction, 'No starter tags were added.'));
+      }
+      const selected = [...draft.selectedSlugs];
+      if (!selected.length) throw new RangeError('Select at least one tag before adding it.');
+      if (selected.some((slug) => !offeredSlugs.has(slug))) throw new RangeError('That tag selection is no longer valid.');
+      let added = 0;
+      store.transaction(() => {
+        for (const interest of pack.interests) {
+          if (!draft.selectedSlugs.has(interest.slug) || store.getTag(interaction.guildId, interest.slug)) continue;
+          store.addTag(interaction.guildId, interest.slug, interest.name, interaction.user.id, `starter:${pack.id}`, { bypassUgc: true });
+          added += 1;
+        }
+      });
+      tagPackDrafts.delete(draftId);
+      const message = added
+        ? `Added ${added} selected starter tag${added === 1 ? '' : 's'}. Existing server tags were left alone.`
+        : 'Those tags were already in the server, so nothing new was added.';
+      return interaction.update(setupPayload(interaction, message));
     }
     if (action === 'tags' || action === 'gathers') {
       const key = action === 'tags' ? 'allow_ugc_tags' : 'allow_gathers';
@@ -1111,7 +1303,7 @@ export function createBot({ store, media, logger = console, now } = {}) {
   const connections = createConnectionService({ store, client, now });
   const gather = createGatherService({ store, now });
   const boundaries = createBoundariesController({ store });
-  client.on(Events.InteractionCreate, createInteractionHandler({ store, media, connections, gather, boundaries, logger }));
+  client.on(Events.InteractionCreate, createInteractionHandler({ store, media, connections, gather, boundaries, logger, now }));
   client.on(Events.GuildCreate, (guild) => store.ensureGuild(guild.id));
   client.on(Events.GuildMemberRemove, async (member) => {
     try {

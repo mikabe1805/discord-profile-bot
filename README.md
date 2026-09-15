@@ -8,7 +8,7 @@ The public surface is intentionally small:
 - `/find [interest]` quietly finds opted-in members and server interests. It does not notify the people returned.
 - `/connect [member] [message]` sends a private connection request, or opens your request list when no member is supplied. The recipient can accept, decline, or block it.
 - `/invite <interests> <message>` previews a capped, opt-in group invitation before it notifies matching members.
-- `/setup` is admin-only and opens the server setup panel.
+- `/setup` is admin-only and opens the server setup panel. Its starter tags are reviewable suggestions: moderators see every tag in a group, select only the useful ones, and add them with an explicit confirmation.
 - `/help` explains the flow in Discord.
 - The member context menu provides **View Bio** and **Request connection**.
 
@@ -16,7 +16,7 @@ If a member does not have an aesthetic photo ready, **Preselected photos** opens
 
 Bio starts private. On first run, choose a reason to begin or choose “Just make my card,” write your card, add your photo, vibe, and title, and then choose a sharing preset: **Private for now**, **Open to hellos** (directory visibility and private requests), or **Open to groups** (also eligible for matching `/invite` messages). Interaction notes are optional and intentionally last in the Bio flow; they can be left blank and have their own visibility choice.
 
-For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=52224&scope=bot%20applications.commands). A server administrator can then run `/setup` to configure interests, limits, member suggestions, group invites, and post the start card in a channel.
+For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=52224&scope=bot%20applications.commands). A server administrator can then run `/setup` to review starter tag suggestions, add custom interests, configure limits, member suggestions and group invites, and post the start card in a channel.
 
 Profiles remain private until the member opts into directory visibility. Search, previews, and ordinary replies suppress mentions. The bot stores its SQLite database and uploaded profile images under `DATA_DIR`; no image-hosting account is required.
 

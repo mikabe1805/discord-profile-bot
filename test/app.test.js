@@ -388,24 +388,103 @@ test('the connection home exposes sent requests and lets an owner undo a block',
   assert.match(unblock.replies.at(-1)[1].content, /Unblocked/);
 });
 
-test('setup can add an additive starter pack and post a permission-bound start card', async (t) => {
+test('setup shows every starter tag and adds only the moderator-curated selection', async (t) => {
   const store = createStore({ databasePath: ':memory:' });
   t.after(() => store.close());
   const admin = { has: () => true };
+  store.addTag('200', 'film-photography', 'Film photography', '100', 'custom', { bypassUgc: true });
+  store.addTag('200', 'co-op-games', 'Co-op games', '100', 'custom', { bypassUgc: true });
+  const listAllTags = store.listTags;
+  store.listTags = (guildId, limit) => listAllTags(guildId, limit).filter((tag) => tag.tag_slug !== 'co-op-games');
   const interaction = baseInteraction({ commandName: 'setup', isChatInputCommand: () => true, memberPermissions: admin });
   const handler = createInteractionHandler({ store, media, ...inactive, logger });
   await handler(interaction);
-  assert.match(interaction.replies.at(-1)[1].embeds[0].data.title, /set up/i);
+  const setup = interaction.replies.at(-1)[1];
+  assert.match(setup.embeds[0].data.title, /set up/i);
+  assert.equal(setup.components[0].toJSON().components[0].custom_id, 'setup:packs:100');
 
-  const pack = baseInteraction({ customId: 'setup:pack:100', values: ['gaming'], isStringSelectMenu: () => true, memberPermissions: admin });
+  const browse = baseInteraction({ customId: 'setup:packs:100', isButton: () => true, memberPermissions: admin });
+  await handler(browse);
+  const suggestions = browse.replies.at(-1)[1];
+  const suggestionFields = suggestions.embeds[0].toJSON().fields;
+  assert.deepEqual(suggestionFields.map((field) => field.name), ['Play together', 'Make together', 'Learn together', 'Common ground']);
+  assert.match(suggestionFields[0].value, /Co-op games.*Tabletop games.*TTRPGs.*Fighting games/);
+  const packOptions = suggestions.components[0].toJSON().components[0].options;
+  assert.match(packOptions[1].description, /Art & design.*Writing.*Music making.*Photography.*Game development/);
+  assert.deepEqual(listAllTags('200').map((tag) => tag.tag_slug), ['co-op-games', 'film-photography']);
+
+  const pack = baseInteraction({ customId: 'setup:pack:100', values: ['play'], isStringSelectMenu: () => true, memberPermissions: admin });
   await handler(pack);
-  assert.deepEqual(store.listTags('200').map((tag) => tag.tag_slug), ['board-games', 'co-op-games', 'game-nights', 'rpgs']);
+  const review = pack.replies.at(-1)[1];
+  assert.match(review.embeds[0].data.description, /nothing changes until/i);
+  assert.match(review.embeds[0].toJSON().fields[0].value, /Co-op games — already in this server/);
+  const picker = review.components[0].toJSON().components[0];
+  assert.equal(picker.min_values, 0);
+  assert.equal(picker.max_values, 3);
+  assert.equal(picker.options.some((option) => option.value === 'co-op-games'), false);
+  assert.equal(picker.options.every((option) => option.default === false), true);
+  assert.deepEqual(listAllTags('200').map((tag) => tag.tag_slug), ['co-op-games', 'film-photography']);
+
+  const chooseTwo = baseInteraction({ customId: picker.custom_id, values: ['tabletop-games', 'ttrpgs'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(chooseTwo);
+  assert.deepEqual(listAllTags('200').map((tag) => tag.tag_slug), ['co-op-games', 'film-photography']);
+  const chosenPicker = chooseTwo.replies.at(-1)[1].components[0].toJSON().components[0];
+  assert.deepEqual(chosenPicker.options.filter((option) => option.default).map((option) => option.value), ['tabletop-games', 'ttrpgs']);
+
+  const unselectOne = baseInteraction({ customId: picker.custom_id, values: ['ttrpgs'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(unselectOne);
+  assert.deepEqual(listAllTags('200').map((tag) => tag.tag_slug), ['co-op-games', 'film-photography']);
+  const applyButton = unselectOne.replies.at(-1)[1].components
+    .flatMap((row) => row.toJSON().components)
+    .find((component) => component.custom_id?.startsWith('setup:apply:'));
+  assert.equal(applyButton.label, 'Add 1 selected');
+
+  const apply = baseInteraction({ customId: applyButton.custom_id, isButton: () => true, memberPermissions: admin });
+  await handler(apply);
+  assert.deepEqual(listAllTags('200').map((tag) => tag.tag_slug), ['co-op-games', 'film-photography', 'ttrpgs']);
+  assert.equal(store.getTag('200', 'ttrpgs').category, 'starter:play');
+  assert.match(apply.replies.at(-1)[1].content, /Added 1 selected starter tag/);
 
   const posted = [];
   const post = baseInteraction({ customId: 'setup:post:100', isButton: () => true, memberPermissions: admin, channel: { send: async (payload) => posted.push(payload) } });
   await handler(post);
   assert.equal(posted[0].components[0].components[0].data.custom_id, 'start:bio');
   assert.equal(posted[0].allowedMentions.parse.length, 0);
+});
+
+test('starter tag reviews can be cancelled or expire without changing server tags', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  const admin = { has: () => true };
+  let time = new Date('2026-09-15T12:00:00Z');
+  const handler = createInteractionHandler({ store, media, ...inactive, logger, now: () => time });
+
+  const pack = baseInteraction({ customId: 'setup:pack:100', values: ['make'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(pack);
+  const picker = pack.replies.at(-1)[1].components[0].toJSON().components[0];
+  const forged = baseInteraction({ customId: picker.custom_id, values: ['homework'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(forged);
+  assert.deepEqual(store.listTags('200'), []);
+  assert.match(forged.replies.at(-1)[1].content, /suggestion group only/i);
+
+  const choose = baseInteraction({ customId: picker.custom_id, values: ['writing', 'photography'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(choose);
+  const cancelButton = choose.replies.at(-1)[1].components
+    .flatMap((row) => row.toJSON().components)
+    .find((component) => component.custom_id?.startsWith('setup:cancel:'));
+  const cancel = baseInteraction({ customId: cancelButton.custom_id, isButton: () => true, memberPermissions: admin });
+  await handler(cancel);
+  assert.deepEqual(store.listTags('200'), []);
+  assert.match(cancel.replies.at(-1)[1].content, /No starter tags were added/);
+
+  const secondPack = baseInteraction({ customId: 'setup:pack:100', values: ['learn'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(secondPack);
+  const secondPicker = secondPack.replies.at(-1)[1].components[0].toJSON().components[0];
+  time = new Date('2026-09-15T12:16:00Z');
+  const expired = baseInteraction({ customId: secondPicker.custom_id, values: ['programming'], isStringSelectMenu: () => true, memberPermissions: admin });
+  await handler(expired);
+  assert.deepEqual(store.listTags('200'), []);
+  assert.match(expired.replies.at(-1)[1].content, /review expired/i);
 });
 
 test('setup can curate custom interests and change the profile limit without old admin commands', async (t) => {
