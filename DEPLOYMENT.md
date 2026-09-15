@@ -15,7 +15,7 @@ DATA_DIR=/data
 
 `CLIENT_ID` and `GUILD_ID` let `npm run start:production` refresh the guild command set after the gateway connects. The multi-stage `Dockerfile` uses Node 22, installs the native `better-sqlite3` dependency in an isolated build stage, and leaves Python and the C/C++ toolchain out of the runtime image. It does not declare Railway variables as build arguments. `.dockerignore` keeps local credentials and database files out of the uploaded build context. Keep the token in Railway's variable store; do not commit `.env` or print it in logs.
 
-The repository's `railway.json` starts `npm run start:production`. Startup runs migrations, connects the bot, then refreshes the guild command set. A command-registration outage is logged without taking the connected bot back down. The service should have one replica while it owns this SQLite file.
+The repository's `.railway/railway.ts` preserves the production variables, declares the `/data` volume and one US East replica, selects the Dockerfile builder, and waits for the GitHub check suite. The container starts `npm run start:production`: startup runs migrations, connects the bot, then refreshes the guild command set. A command-registration outage is logged without taking the connected bot back down. The service should have one replica while it owns this SQLite file.
 
 Enable **Server Members Intent** for Bio in the Discord Developer Portal. The bot uses it to discard a member's saved data when they leave the server; the current application is enabled for the limited, unverified-app form of that intent.
 

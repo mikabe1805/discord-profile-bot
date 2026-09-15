@@ -26,5 +26,8 @@
   },
   "overrides": {
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "railway": "3.11.0"
   }
 }
