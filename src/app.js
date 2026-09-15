@@ -482,15 +482,28 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     })));
   }
 
-  async function showProfile(interaction, userId, { shared = false } = {}) {
+  async function showProfile(interaction, userId, { visible = false } = {}) {
     const stored = store.getProfile(interaction.guildId, userId);
     if (!stored) throw new RangeError('That member has not made a profile yet.');
     if (userId !== interaction.user.id && !stored.discoverable) {
       throw new RangeError('That member has kept their profile private.');
     }
-    await interaction.deferReply(shared ? {} : { flags: PRIVATE });
-    const payload = await profilePayload({ store, media, interaction, userId, includeStatus: true, includeBoundaries: !shared });
-    return interaction.editReply(withNoMentions(payload));
+    await interaction.deferReply(visible ? {} : { flags: PRIVATE });
+    try {
+      const payload = await profilePayload({
+        store,
+        media,
+        interaction,
+        userId,
+        includeStatus: !visible,
+        includeBoundaries: !visible,
+      });
+      return interaction.editReply(withNoMentions(payload));
+    } catch (error) {
+      if (!visible) throw error;
+      logger.error('Could not build public profile card', { guildId: interaction.guildId, userId, error });
+      return interaction.editReply(withNoMentions('Bio could not load that card right now. Please try again.'));
+    }
   }
 
   async function showBioHome(interaction, { uploaded = false, forcePrivate = false } = {}) {
@@ -593,7 +606,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         )], embeds: [],
       }));
     }
-    if (action === 'share') return showProfile(interaction, interaction.user.id, { shared: true });
+    if (action === 'share') return showProfile(interaction, interaction.user.id, { visible: true });
   }
 
   async function handleStyleComponent(interaction) {
@@ -691,7 +704,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       const target = interaction.options.getUser('user') || interaction.user;
       return showProfile(interaction, target.id);
     }
-    if (!group && sub === 'share') return showProfile(interaction, interaction.user.id, { shared: true });
+    if (!group && sub === 'share') return showProfile(interaction, interaction.user.id, { visible: true });
     if (!group && sub === 'preferences') {
       await ensureProfile(store, interaction.guildId, interaction.user.id);
       const patch = {};
@@ -742,6 +755,12 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       if (store.getProfile(interaction.guildId, interaction.user.id)) store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: null });
       return privateReply(interaction, 'Your profile now uses your Discord avatar.');
     }
+  }
+
+  async function handleView(interaction) {
+    const target = interaction.options.getUser('member') || interaction.user;
+    const visible = interaction.options.getBoolean('visible') !== false;
+    return showProfile(interaction, target.id, { visible });
   }
 
   async function handleProfileModal(interaction) {
@@ -1227,7 +1246,8 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         .setDescription('A member directory for finding shared interests and making contact by choice.')
         .addFields(
           { name: 'Start', value: '`/bio` opens your private home. Upload your own photo, choose a general vibe and title, then decide how the card is shared. Preselected photos are there if you need one.' },
-          { name: 'Find people', value: '`/find` quietly shows opted-in people and server interests. Right-click a member and choose **View Bio** for a direct look.' },
+          { name: 'Show a card', value: '`/view` posts your card in the channel by default. Choose a member to show their opted-in card, or set `visible:false` to keep the result to yourself.' },
+          { name: 'Find people', value: '`/find` quietly shows opted-in people and server interests. Right-click a member and choose **View Bio** for a private look.' },
           { name: 'Make contact', value: '`/connect member:@someone` sends a private request they can accept, decline, or block.' },
           { name: 'Invite a group', value: '`/invite` shows a private preview before it notifies opted-in members.' },
           { name: 'Interaction notes (optional)', value: 'The last control in `/bio` lets you share preferences only if that would help.' },
@@ -1279,6 +1299,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       }
       if (!interaction.isChatInputCommand?.()) return;
       if (interaction.commandName === 'bio') return await handleBio(interaction);
+      if (interaction.commandName === 'view') return await handleView(interaction);
       if (interaction.commandName === 'find') return await handleFind(interaction);
       if (interaction.commandName === 'connect') return await handleConnect(interaction);
       if (interaction.commandName === 'invite') return await handleInvite(interaction);

@@ -5,6 +5,7 @@ Bio is a small-server member directory for Discord. It helps people say a little
 The public surface is intentionally small:
 
 - `/bio [picture]` opens your private Bio home. Upload your own PNG, JPEG, GIF, or WebP in the **Photo, vibe & title** panel, choose a general vibe, and give the card a title. The optional `picture` command field is a quicker upload path.
+- `/view [member] [visible]` shows a Bio card. With no options, it posts your own card in the channel. Choose an opted-in member to show their card, or set `visible:false` to keep the result private.
 - `/find [interest]` quietly finds opted-in members and server interests. It does not notify the people returned.
 - `/connect [member] [message]` sends a private connection request, or opens your request list when no member is supplied. The recipient can accept, decline, or block it.
 - `/invite <interests> <message>` previews a capped, opt-in group invitation before it notifies matching members.
@@ -18,7 +19,7 @@ Bio starts private. On first run, choose a reason to begin or choose “Just mak
 
 For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=52224&scope=bot%20applications.commands). A server administrator can then run `/setup` to review starter tag suggestions, add custom interests, configure limits, member suggestions and group invites, and post the start card in a channel.
 
-Profiles remain private until the member opts into directory visibility. Search, previews, and ordinary replies suppress mentions. The bot stores its SQLite database and uploaded profile images under `DATA_DIR`; no image-hosting account is required.
+Profiles stay out of discovery until the member opts into directory visibility. A member can intentionally post their own card with `/view` without changing that setting; other members' cards can only be viewed after they opt in. Public cards omit interaction notes and sharing-status details. Search, previews, and ordinary replies suppress mentions. The bot stores its SQLite database and uploaded profile images under `DATA_DIR`; no image-hosting account is required.
 
 ## Local development
 

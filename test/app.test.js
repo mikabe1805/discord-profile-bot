@@ -197,7 +197,138 @@ test('a card can be deliberately shared from the private Bio home', async (t) =>
   assert.deepEqual(interaction.replies[0], ['defer', {}]);
   assert.match(interaction.replies.at(-1)[1].embeds[0].data.fields[0].value, /hello/);
   assert.equal(interaction.replies.at(-1)[1].embeds[0].data.fields.some((field) => field.name.startsWith('Interaction notes')), false);
+  assert.equal(interaction.replies.at(-1)[1].embeds[0].data.footer, undefined);
   assert.equal(interaction.replies.at(-1)[1].allowedMentions.parse.length, 0);
+  assert.equal(store.getProfile('200', '100').discoverable, false);
+});
+
+test('/view defaults to a public self card without changing directory privacy', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { bio: 'hello from here', discoverable: false, allow_requests: true });
+  store.saveBoundaries('200', '100', { notes: 'ask before dropping into voice' }, { level: 'private' });
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+  const interaction = baseInteraction({
+    commandName: 'view',
+    isChatInputCommand: () => true,
+    options: {
+      getUser: (name) => name === 'member' ? null : undefined,
+      getBoolean: (name) => name === 'visible' ? null : undefined,
+    },
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(interaction.replies[0], ['defer', {}]);
+  const response = interaction.replies.at(-1)[1];
+  assert.match(response.embeds[0].data.fields[0].value, /hello from here/);
+  assert.equal(response.embeds[0].data.fields.some((field) => field.name.startsWith('Interaction notes')), false);
+  assert.equal(response.embeds[0].data.footer, undefined);
+  assert.deepEqual(response.allowedMentions, { parse: [], repliedUser: false });
+  assert.equal(store.getProfile('200', '100').discoverable, false);
+  assert.equal(store.getProfile('200', '100').allow_requests, true);
+});
+
+test('/view visible:false keeps the full self card private', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { bio: 'quiet card', discoverable: false });
+  store.saveBoundaries('200', '100', { notes: 'please ask first' }, { level: 'private' });
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+  const interaction = baseInteraction({
+    commandName: 'view',
+    isChatInputCommand: () => true,
+    options: { getUser: () => null, getBoolean: () => false },
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(interaction.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
+  const embed = interaction.replies.at(-1)[1].embeds[0].data;
+  assert.equal(embed.fields.some((field) => field.name.startsWith('Interaction notes')), true);
+  assert.match(embed.footer.text, /Directory: private/);
+});
+
+test('/view can publicly show an opted-in member while keeping private views private', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '300', { bio: 'tabletop and tea', discoverable: true, allow_requests: true });
+  store.saveBoundaries('200', '300', { notes: 'please ping first' }, { level: 'members' });
+  const target = { id: '300', username: 'June', displayAvatarURL: () => 'https://example.com/june.png' };
+  const guild = {
+    id: '200',
+    members: {
+      cache: new Map([
+        ['100', { id: '100', displayName: 'Mika', user: { id: '100', bot: false }, roles: { cache: new Map() } }],
+        ['300', { id: '300', displayName: 'June', user: target, roles: { cache: new Map() }, displayAvatarURL: () => 'https://example.com/june.png' }],
+      ]),
+      fetch: async () => null,
+    },
+  };
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+  const publicView = baseInteraction({
+    commandName: 'view', guild, isChatInputCommand: () => true,
+    options: { getUser: () => target, getBoolean: () => null },
+  });
+  await handler(publicView);
+  assert.deepEqual(publicView.replies[0], ['defer', {}]);
+  const publicEmbed = publicView.replies.at(-1)[1].embeds[0].data;
+  assert.match(publicEmbed.author.name, /June/);
+  assert.equal(publicEmbed.fields.some((field) => field.name.startsWith('Interaction notes')), false);
+  assert.equal(publicEmbed.footer, undefined);
+
+  const privateView = baseInteraction({
+    commandName: 'view', guild, isChatInputCommand: () => true,
+    options: { getUser: () => target, getBoolean: () => false },
+  });
+  await handler(privateView);
+  assert.deepEqual(privateView.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
+  const privateEmbed = privateView.replies.at(-1)[1].embeds[0].data;
+  assert.equal(privateEmbed.fields.some((field) => field.name.startsWith('Interaction notes')), true);
+  assert.match(privateEmbed.footer.text, /Directory: visible/);
+});
+
+test('/view refuses another member who is not listed before choosing response visibility', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '300', { bio: 'not listed', discoverable: false });
+  let mediaResolutions = 0;
+  const guardedMedia = { ...media, resolve: async () => { mediaResolutions += 1; return null; } };
+  const target = { id: '300', username: 'June' };
+  const handler = createInteractionHandler({ store, media: guardedMedia, ...inactive, logger });
+
+  for (const visible of [null, false]) {
+    const interaction = baseInteraction({
+      commandName: 'view', isChatInputCommand: () => true,
+      options: { getUser: () => target, getBoolean: () => visible },
+    });
+    await handler(interaction);
+    assert.equal(interaction.deferred, false);
+    assert.equal(interaction.replies[0][0], 'reply');
+    assert.equal(interaction.replies[0][1].flags, MessageFlags.Ephemeral);
+    assert.match(interaction.replies[0][1].content, /kept their profile private/);
+  }
+  assert.equal(mediaResolutions, 0);
+});
+
+test('/view reports a generic error if a public card fails after its visibility is locked', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { bio: 'hello', profile_image: 'https://example.com/card.png' });
+  const failingMedia = { ...media, resolve: async () => { throw new Error('secret storage path failed'); } };
+  const handler = createInteractionHandler({ store, media: failingMedia, ...inactive, logger });
+  const interaction = baseInteraction({
+    commandName: 'view', isChatInputCommand: () => true,
+    options: { getUser: () => null, getBoolean: () => null },
+  });
+
+  await handler(interaction);
+
+  assert.deepEqual(interaction.replies[0], ['defer', {}]);
+  assert.equal(interaction.replies.length, 2);
+  assert.match(interaction.replies[1][1].content, /could not load that card/i);
+  assert.doesNotMatch(interaction.replies[1][1].content, /secret storage path/);
+  assert.deepEqual(interaction.replies[1][1].allowedMentions, { parse: [], repliedUser: false });
 });
 
 test('Photo & vibe leads with a working upload picker and hides fallback photos', async (t) => {

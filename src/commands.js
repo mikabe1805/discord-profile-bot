@@ -16,6 +16,16 @@ const commandBuilders = [
             .setDescription('Upload your own profile photo (PNG, JPEG, GIF, or WebP)')),
 
     new SlashCommandBuilder()
+        .setName('view')
+        .setDescription('Show a Bio card in this channel or just to you')
+        .addUserOption((option) => option
+            .setName('member')
+            .setDescription('Whose Bio to show (defaults to you)'))
+        .addBooleanOption((option) => option
+            .setName('visible')
+            .setDescription('Show it in the channel (defaults to true)')),
+
+    new SlashCommandBuilder()
         .setName('find')
         .setDescription('Find people by a shared interest')
         .addStringOption((option) => option
