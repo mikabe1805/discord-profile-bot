@@ -1,62 +1,62 @@
 /**
- * Curated, bundled card art. These descriptors are deliberately separate from
- * a member's uploaded image: their marker is portable, and the artwork is
- * shipped read-only with the bot.
+ * Curated, bundled photographs. These descriptors are deliberately separate
+ * from a member's uploaded image: their marker is portable, and the photos are
+ * shipped read-only with the bot. IDs stay stable because profiles persist them.
  */
 const presets = [
   {
+    id: 'moss-room',
+    name: 'Canopy',
+    description: 'Bright leaves and the feeling of looking deeper.',
+    primaryColor: '#58704C',
+    title: 'Canopy',
+    tagsEmoji: '🌿',
+    assetFilename: 'canopy.jpg',
+  },
+  {
     id: 'windowseat',
-    name: 'Windowseat',
-    description: 'A warm rainy corner for slow conversations.',
-    primaryColor: '#786752',
-    title: 'Windowseat',
-    tagsEmoji: '☕',
-    assetFilename: 'windowseat.png',
+    name: 'Still Water',
+    description: 'A quiet sunset reflected across the lake.',
+    primaryColor: '#8B6E5B',
+    title: 'Still Water',
+    tagsEmoji: '🌅',
+    assetFilename: 'still-water.jpg',
   },
   {
     id: 'field-notes',
-    name: 'Field Notes',
-    description: 'Paper, ink, and room for a new obsession.',
-    primaryColor: '#6F8060',
-    title: 'Field Notes',
-    tagsEmoji: '✎',
-    assetFilename: 'field-notes.png',
+    name: 'Shoreline',
+    description: 'Small waves, smooth stones, and room to breathe.',
+    primaryColor: '#75665F',
+    title: 'Shoreline',
+    tagsEmoji: '🌊',
+    assetFilename: 'shoreline.jpg',
   },
   {
     id: 'arcade-glow',
-    name: 'Arcade Glow',
-    description: 'A bright little signal for game nights and side quests.',
-    primaryColor: '#A85C8B',
-    title: 'Arcade Glow',
-    tagsEmoji: '🕹️',
-    assetFilename: 'arcade-glow.png',
-  },
-  {
-    id: 'moss-room',
-    name: 'Moss Room',
-    description: 'Soft green, low stakes, and comfortable silences.',
-    primaryColor: '#56715A',
-    title: 'Moss Room',
-    tagsEmoji: '🌿',
-    assetFilename: 'moss-room.png',
+    name: 'Lantern Sky',
+    description: 'A dark sky filled with warm drifting lights.',
+    primaryColor: '#A8683F',
+    title: 'Lantern Sky',
+    tagsEmoji: '✨',
+    assetFilename: 'lantern-sky.jpg',
   },
   {
     id: 'night-walk',
-    name: 'Night Walk',
-    description: 'Cool air, city lights, and a good tangent.',
-    primaryColor: '#2F425E',
-    title: 'Night Walk',
-    tagsEmoji: '🌙',
-    assetFilename: 'night-walk.png',
+    name: 'Olive Dusk',
+    description: 'Cool trees over a soft wash of evening color.',
+    primaryColor: '#66777A',
+    title: 'Olive Dusk',
+    tagsEmoji: '🫒',
+    assetFilename: 'olive-dusk.jpg',
   },
   {
     id: 'constellation',
-    name: 'Constellation',
-    description: 'A quiet sky for people who find each other over time.',
-    primaryColor: '#7663A6',
-    title: 'Constellation',
-    tagsEmoji: '✦',
-    assetFilename: 'constellation.png',
+    name: 'Hillside Weather',
+    description: 'Pastel storm light moving over distant hills.',
+    primaryColor: '#7B7180',
+    title: 'Hillside Weather',
+    tagsEmoji: '☁️',
+    assetFilename: 'hillside-weather.jpg',
   },
 ];
 
@@ -69,10 +69,10 @@ export function getCardArtPreset(id) {
   return typeof id === 'string' ? presetsById.get(id) || null : null;
 }
 
-/** Create the only persisted marker format accepted for bundled card art. */
+/** Create the only persisted marker format accepted for a bundled photo. */
 export function markerForCardArt(id) {
   const preset = getCardArtPreset(id);
-  if (!preset) throw new RangeError('Choose a valid card art preset.');
+  if (!preset) throw new RangeError('Choose a valid photo preset.');
   return `preset:${preset.id}`;
 }
 

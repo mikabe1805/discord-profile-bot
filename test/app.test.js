@@ -215,7 +215,7 @@ test('a style preset removes uploads and stores only the strict preset marker', 
   assert.deepEqual(calls, [['200', '100']]);
   assert.equal(store.getProfile('200', '100').profile_image, 'preset:windowseat');
   assert.equal(store.getTheme('200', '100').theme, 'windowseat');
-  assert.match(interaction.replies.at(-1)[1].content, /Windowseat/);
+  assert.match(interaction.replies.at(-1)[1].content, /Still Water/);
 });
 
 test('sharing presets make every consent choice explicit', async (t) => {

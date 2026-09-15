@@ -67,15 +67,15 @@ test('enforces the streamed byte limit and treats legacy URLs as read-only', asy
   assert.deepEqual(await store.resolve('https://example.com/legacy-image.png', guildId, userId), { file: null, url: 'https://example.com/legacy-image.png' });
 });
 
-test('resolves a strict bundled card-art marker without creating guild storage', async (t) => {
+test('resolves a strict bundled photo marker without creating guild storage', async (t) => {
   const dataDir = path.join(os.tmpdir(), `profile-media-unused-${Date.now()}-${Math.random()}`);
   const store = createMediaStore({ dataDir, fetchImpl: async () => response(png) });
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
 
   const resolved = await store.resolve(markerForCardArt('windowseat'), 'not-a-guild', 'not-a-user');
-  assert.equal(resolved.url, 'attachment://card-art-windowseat.png');
-  assert.equal(resolved.file.name, 'card-art-windowseat.png');
-  assert.match(resolved.file.attachment, /assets[\\/]profile-presets[\\/]windowseat\.png$/);
+  assert.equal(resolved.url, 'attachment://profile-preset-windowseat.jpg');
+  assert.equal(resolved.file.name, 'profile-preset-windowseat.jpg');
+  assert.match(resolved.file.attachment, /assets[\\/]profile-presets[\\/]still-water\.jpg$/);
   assert.equal((await fs.stat(resolved.file.attachment)).isFile(), true);
   await assert.rejects(fs.access(dataDir));
   assert.equal(await store.resolve('preset:windowseat.png', guildId, userId), null);

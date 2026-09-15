@@ -165,7 +165,9 @@ export function createMediaStore({ dataDir, fetchImpl = globalThis.fetch, maxByt
         if (error.code === 'ENOENT') return null;
         throw error;
       }
-      const name = `card-art-${preset.id}.png`;
+      const extension = path.extname(preset.assetFilename).toLowerCase();
+      if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) return null;
+      const name = `profile-preset-${preset.id}${extension}`;
       return { file: { attachment: file, name }, url: `attachment://${name}` };
     }
 

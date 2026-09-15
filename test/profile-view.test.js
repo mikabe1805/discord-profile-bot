@@ -36,3 +36,17 @@ test('uses a local image descriptor as a Discord attachment and limits long text
   assert.ok(embed.fields[0].value.length <= 4096);
   assert.ok(embed.fields[0].value.endsWith('…'));
 });
+
+test('a persisted photo marker uses the current bundled theme metadata', () => {
+  const payload = buildProfilePayload({
+    profile: { profile_image: 'preset:moss-room' },
+    tags: ['hiking'],
+    theme: { primary_color: '#000000', title: 'Old preset title', tags_emoji: 'x' },
+    displayName: 'Mika',
+    profileImage: { attachment: 'canopy.jpg', name: 'profile-preset-moss-room.jpg' },
+  });
+  const embed = payload.embeds[0].toJSON();
+  assert.equal(embed.title, 'Canopy');
+  assert.equal(embed.color, 0x58704C);
+  assert.equal(embed.fields.at(-1).name, '🌿 Interests');
+});

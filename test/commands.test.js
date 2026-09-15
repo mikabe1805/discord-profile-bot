@@ -33,7 +33,7 @@ test('the old multi-root command surface is gone', () => {
 test('bio makes the optional personal picture upload discoverable', () => {
     const picture = option(byName('bio'), 'picture');
     assert.equal(picture.required, false);
-    assert.equal(picture.description, 'Upload your own card art (PNG, JPEG, GIF, or WebP)');
+    assert.equal(picture.description, 'Upload your own profile photo (PNG, JPEG, GIF, or WebP)');
 });
 
 test('find, connect, and invite expose the short direct inputs', () => {

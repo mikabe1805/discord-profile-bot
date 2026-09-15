@@ -13,7 +13,7 @@ const commandBuilders = [
         .setDescription('Open your Bio and make it your own')
         .addAttachmentOption((option) => option
             .setName('picture')
-            .setDescription('Upload your own card art (PNG, JPEG, GIF, or WebP)')),
+            .setDescription('Upload your own profile photo (PNG, JPEG, GIF, or WebP)')),
 
     new SlashCommandBuilder()
         .setName('find')

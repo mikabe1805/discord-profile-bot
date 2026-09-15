@@ -131,7 +131,7 @@ function backToBioRow(ownerId) {
 function styleRows(ownerId) {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder().setCustomId(`style:preset:${ownerId}`).setPlaceholder('Choose card art')
+      new StringSelectMenuBuilder().setCustomId(`style:preset:${ownerId}`).setPlaceholder('Choose a mood photo')
         .addOptions(CARD_ART_PRESETS.map((preset) => ({ label: preset.name, value: preset.id, description: preset.description.slice(0, 100) }))),
     ),
     new ActionRowBuilder().addComponents(
@@ -372,7 +372,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     if (action === 'home') return showBioHome(interaction);
     if (action === 'style') {
       return interaction.update(withNoMentions({
-        content: 'Choose bundled card art, use your Discord avatar, or upload your own image with `/bio picture:`. Choosing a preset removes any uploaded Bio image.',
+        content: 'Choose a built-in mood photo, use your Discord avatar, or upload your own with `/bio picture:`. The built-in photos are real photographs from the bot owner, offered as starting points. Choosing one removes any uploaded Bio image.',
         components: styleRows(interaction.user.id), embeds: [],
       }));
     }
@@ -404,7 +404,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     if (ownerId !== interaction.user.id) throw new RangeError('That style control belongs to someone else.');
     if (action === 'preset') {
       const preset = getCardArtPreset(interaction.values?.[0]);
-      if (!preset) throw new RangeError('Choose a valid card art preset.');
+      if (!preset) throw new RangeError('Choose a valid photo preset.');
       store.transaction(() => {
         store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: markerForCardArt(preset.id) });
         store.updateTheme(interaction.guildId, interaction.user.id, {
@@ -415,7 +415,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         logger.warn?.('Could not clean up a replaced Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
       }
       const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
-      return interaction.update(withNoMentions({ content: `${preset.name} is now the art on your card.`, ...payload, components: styleRows(interaction.user.id) }));
+      return interaction.update(withNoMentions({ content: `${preset.name} is now your card’s mood photo.`, ...payload, components: styleRows(interaction.user.id) }));
     }
     if (action === 'remove') {
       store.transaction(() => {
@@ -428,7 +428,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         logger.warn?.('Could not clean up a removed Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
       }
       const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
-      return interaction.update(withNoMentions({ content: 'Your card now uses your Discord avatar. You can choose bundled art anytime.', ...payload, components: styleRows(interaction.user.id) }));
+      return interaction.update(withNoMentions({ content: 'Your card now uses your Discord avatar. You can choose a built-in photo anytime.', ...payload, components: styleRows(interaction.user.id) }));
     }
   }
 
@@ -920,7 +920,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         .setTitle('Bio')
         .setDescription('A member directory for finding shared interests and making contact by choice.')
         .addFields(
-          { name: 'Start', value: '`/bio` opens your private home. Write a card, choose card art, then decide how it is shared.' },
+          { name: 'Start', value: '`/bio` opens your private home. Write a card, choose a mood photo or your own picture, then decide how it is shared.' },
           { name: 'Find people', value: '`/find` quietly shows opted-in people and server interests. Right-click a member and choose **View Bio** for a direct look.' },
           { name: 'Make contact', value: '`/connect member:@someone` sends a private request they can accept, decline, or block.' },
           { name: 'Invite a group', value: '`/invite` shows a private preview before it notifies opted-in members.' },
