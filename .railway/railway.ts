@@ -21,9 +21,9 @@ export default defineRailway(() => {
     start: "npm run start:production",
     replicas: { "us-east4-eqdc4a": 1 },
     deploy: {
+      // Railway stores its effective restart defaults as null; declaring them
+      // makes every later config plan repeat the same update after a successful apply.
       ipv6EgressEnabled: false,
-      restartPolicyMaxRetries: 10,
-      restartPolicyType: "ON_FAILURE",
       runtime: "V2",
       sleepApplication: true,
       useLegacyStacker: false,
