@@ -43,6 +43,7 @@ function baseInteraction(overrides = {}) {
     async followUp(payload) { replies.push(['followUp', payload]); return payload; },
     async update(payload) { replies.push(['update', payload]); return payload; },
     async deferUpdate() { this.deferred = true; replies.push(['deferUpdate']); },
+    async showModal(payload) { replies.push(['modal', payload]); return payload; },
     ...overrides,
   };
 }
@@ -199,23 +200,154 @@ test('a card can be deliberately shared from the private Bio home', async (t) =>
   assert.equal(interaction.replies.at(-1)[1].allowedMentions.parse.length, 0);
 });
 
-test('a style preset removes uploads and stores only the strict preset marker', async (t) => {
+test('Photo & vibe leads with a working upload picker and hides fallback photos', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', {});
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+
+  const hub = baseInteraction({ customId: 'bio:style:100', isButton: () => true });
+  await handler(hub);
+  const response = hub.replies.at(-1)[1];
+  assert.match(response.content, /Start with a photo of your own/);
+  assert.equal(response.components[0].components[0].data.custom_id, 'style:upload:100');
+  assert.equal(response.components[0].components[0].data.label, 'Upload your own photo');
+  assert.equal(response.components[0].components[0].data.style, 1);
+  assert.equal(response.components[1].components[0].data.custom_id, 'style:vibe:100');
+  assert.equal(response.components[2].components[1].data.custom_id, 'style:presets:100');
+  assert.equal(response.components.flatMap((row) => row.components).some((component) => component.data.custom_id === 'style:preset:100'), false);
+
+  const openUpload = baseInteraction({ customId: 'style:upload:100', isButton: () => true });
+  await handler(openUpload);
+  const modal = openUpload.replies.at(-1)[1].toJSON();
+  assert.equal(modal.title, 'Upload your own photo');
+  assert.equal(modal.components[0].label, 'Choose a photo');
+  assert.deepEqual(modal.components[0].component, {
+    type: 19,
+    custom_id: 'photo',
+    required: true,
+    min_values: 1,
+    max_values: 1,
+  });
+
+  const openPresets = baseInteraction({ customId: 'style:presets:100', isButton: () => true });
+  await handler(openPresets);
+  const presetPanel = openPresets.replies.at(-1)[1];
+  assert.match(presetPanel.content, /owner-shot photos.*backups/i);
+  assert.equal(presetPanel.components[0].components[0].data.custom_id, 'style:preset:100');
+  assert.equal(presetPanel.components[0].components[0].data.placeholder, 'Choose a preselected photo');
+});
+
+test('modal and command photo uploads preserve the chosen vibe and title', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { profile_image: 'preset:moss-room' });
+  store.updateTheme('200', '100', { theme: 'quiet-green', primary_color: '#58704C', secondary_color: '#D8DDCF', title: 'Mika after dark', tags_emoji: '🌿' });
+  const savedAttachments = [];
+  const styleMedia = {
+    ...media,
+    save: async (_guildId, _userId, attachment) => {
+      savedAttachments.push(attachment);
+      return 'local:profile-images/200/100.jpg';
+    },
+  };
+  const handler = createInteractionHandler({ store, media: styleMedia, ...inactive, logger });
+  const firstPhoto = { id: '900', url: 'https://cdn.example/first.jpg', contentType: 'image/jpeg', size: 100 };
+  const modalUpload = baseInteraction({
+    customId: 'style:upload:100',
+    isModalSubmit: () => true,
+    fields: { getUploadedFiles: () => new Map([['900', firstPhoto]]) },
+  });
+  await handler(modalUpload);
+  assert.deepEqual(modalUpload.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
+  assert.equal(store.getProfile('200', '100').profile_image, 'local:profile-images/200/100.jpg');
+  assert.equal(store.getTheme('200', '100').title, 'Mika after dark');
+  assert.equal(store.getTheme('200', '100').theme, 'quiet-green');
+
+  const secondPhoto = { id: '901', url: 'https://cdn.example/second.png', contentType: 'image/png', size: 100 };
+  const commandUpload = baseInteraction({
+    commandName: 'bio',
+    isChatInputCommand: () => true,
+    options: { getAttachment: () => secondPhoto },
+  });
+  await handler(commandUpload);
+  assert.equal(savedAttachments.length, 2);
+  assert.equal(store.getTheme('200', '100').title, 'Mika after dark');
+  assert.equal(store.getTheme('200', '100').theme, 'quiet-green');
+  assert.match(commandUpload.replies.at(-1)[1].content, /vibe and title stayed the same/i);
+});
+
+test('a rejected modal upload keeps the existing card and returns to the photo controls', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { profile_image: 'preset:moss-room' });
+  store.updateTheme('200', '100', { theme: 'soft-cloud', title: 'Cloud room' });
+  const rejectingMedia = { ...media, save: async () => { throw new Error('Use a PNG, JPEG, GIF, or WebP image.'); } };
+  const handler = createInteractionHandler({ store, media: rejectingMedia, ...inactive, logger });
+  const interaction = baseInteraction({
+    customId: 'style:upload:100',
+    isModalSubmit: () => true,
+    fields: { getUploadedFiles: () => new Map([['900', { url: 'https://cdn.example/file.txt' }]]) },
+  });
+  await handler(interaction);
+  const response = interaction.replies.at(-1)[1];
+  assert.match(response.content, /Use a PNG, JPEG, GIF, or WebP image/);
+  assert.equal(response.components[0].components[0].data.custom_id, 'style:upload:100');
+  assert.equal(store.getProfile('200', '100').profile_image, 'preset:moss-room');
+  assert.equal(store.getTheme('200', '100').title, 'Cloud room');
+});
+
+test('photos, vibes, and titles can each change without overwriting the others', async (t) => {
   const store = createStore({ databasePath: ':memory:' });
   t.after(() => store.close());
   store.saveProfile('200', '100', { profile_image: 'local:profile-images/200/100.png' });
+  store.updateTheme('200', '100', { theme: 'quiet-green', primary_color: '#58704C', title: 'My corner', tags_emoji: '🌿' });
   const calls = [];
   const styleMedia = { ...media, remove: async (...args) => calls.push(args) };
-  const interaction = baseInteraction({
+  const handler = createInteractionHandler({ store, media: styleMedia, ...inactive, logger });
+
+  const preselected = baseInteraction({
     customId: 'style:preset:100',
     values: ['windowseat'],
     isStringSelectMenu: () => true,
   });
-  const handler = createInteractionHandler({ store, media: styleMedia, ...inactive, logger });
-  await handler(interaction);
+  await handler(preselected);
   assert.deepEqual(calls, [['200', '100']]);
   assert.equal(store.getProfile('200', '100').profile_image, 'preset:windowseat');
-  assert.equal(store.getTheme('200', '100').theme, 'windowseat');
-  assert.match(interaction.replies.at(-1)[1].content, /Still Water/);
+  assert.equal(store.getTheme('200', '100').theme, 'quiet-green');
+  assert.equal(store.getTheme('200', '100').title, 'My corner');
+  assert.match(preselected.replies.at(-1)[1].content, /backup photo.*stayed the same/i);
+
+  const vibe = baseInteraction({ customId: 'style:vibe:100', values: ['lantern-night'], isStringSelectMenu: () => true });
+  await handler(vibe);
+  assert.equal(store.getProfile('200', '100').profile_image, 'preset:windowseat');
+  assert.equal(store.getTheme('200', '100').theme, 'lantern-night');
+  assert.equal(store.getTheme('200', '100').primary_color, '#A8683F');
+  assert.equal(store.getTheme('200', '100').title, 'My corner');
+
+  const openTitle = baseInteraction({ customId: 'style:title:100', isButton: () => true });
+  await handler(openTitle);
+  const titleEditor = openTitle.replies.at(-1)[1].toJSON();
+  assert.equal(titleEditor.title, 'Choose your title');
+  assert.equal(titleEditor.components[0].components[0].custom_id, 'title');
+  assert.equal(titleEditor.components[0].components[0].value, 'My corner');
+
+  const title = baseInteraction({
+    customId: 'style:title:100',
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: () => 'Tea, games, and weather' },
+  });
+  await handler(title);
+  assert.deepEqual(title.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
+  assert.equal(store.getProfile('200', '100').profile_image, 'preset:windowseat');
+  assert.equal(store.getTheme('200', '100').theme, 'lantern-night');
+  assert.equal(store.getTheme('200', '100').title, 'Tea, games, and weather');
+
+  const avatar = baseInteraction({ customId: 'style:remove:100', isButton: () => true });
+  await handler(avatar);
+  assert.equal(store.getProfile('200', '100').profile_image, null);
+  assert.equal(store.getTheme('200', '100').theme, 'lantern-night');
+  assert.equal(store.getTheme('200', '100').title, 'Tea, games, and weather');
 });
 
 test('sharing presets make every consent choice explicit', async (t) => {

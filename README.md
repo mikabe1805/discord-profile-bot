@@ -4,7 +4,7 @@ Bio is a small-server member directory for Discord. It helps people say a little
 
 The public surface is intentionally small:
 
-- `/bio [picture]` opens your private Bio home. Write or edit your card, choose from six built-in mood photos (**Canopy**, **Still Water**, **Shoreline**, **Lantern Sky**, **Olive Dusk**, and **Hillside Weather**), use your Discord avatar, or optionally upload your own PNG, JPEG, GIF, or WebP.
+- `/bio [picture]` opens your private Bio home. Upload your own PNG, JPEG, GIF, or WebP in the **Photo, vibe & title** panel, choose a general vibe, and give the card a title. The optional `picture` command field is a quicker upload path.
 - `/find [interest]` quietly finds opted-in members and server interests. It does not notify the people returned.
 - `/connect [member] [message]` sends a private connection request, or opens your request list when no member is supplied. The recipient can accept, decline, or block it.
 - `/invite <interests> <message>` previews a capped, opt-in group invitation before it notifies matching members.
@@ -12,9 +12,9 @@ The public surface is intentionally small:
 - `/help` explains the flow in Discord.
 - The member context menu provides **View Bio** and **Request connection**.
 
-The six built-in photos are original work supplied by the bot owner. Their source mapping is recorded in [`src/assets/profile-presets/SOURCES.md`](src/assets/profile-presets/SOURCES.md); Bio does not bundle generated or stock artwork.
+If a member does not have an aesthetic photo ready, **Preselected photos** opens six original photographs supplied by the bot owner: **Canopy**, **Still Water**, **Shoreline**, **Lantern Sky**, **Olive Dusk**, and **Hillside Weather**. They are backups and stay separate from the member's chosen vibe and title. Their source mapping is recorded in [`src/assets/profile-presets/SOURCES.md`](src/assets/profile-presets/SOURCES.md); Bio does not bundle generated or stock artwork.
 
-Bio starts private. On first run, choose a reason to begin or choose “Just make my card,” write your card, pick a mood photo, and then choose a sharing preset: **Private for now**, **Open to hellos** (directory visibility and private requests), or **Open to groups** (also eligible for matching `/invite` messages). Interaction notes are optional and intentionally last in the Bio flow; they can be left blank and have their own visibility choice.
+Bio starts private. On first run, choose a reason to begin or choose “Just make my card,” write your card, add your photo, vibe, and title, and then choose a sharing preset: **Private for now**, **Open to hellos** (directory visibility and private requests), or **Open to groups** (also eligible for matching `/invite` messages). Interaction notes are optional and intentionally last in the Bio flow; they can be left blank and have their own visibility choice.
 
 For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=52224&scope=bot%20applications.commands). A server administrator can then run `/setup` to configure interests, limits, member suggestions, group invites, and post the start card in a channel.
 

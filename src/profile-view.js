@@ -1,7 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { safeDisplayText } from './domain.js';
 import { summarizeBoundaries } from './modules/boundaries/embed.js';
-import { presetForCardArtMarker } from './profile-presets.js';
 
 const EMBED_LIMITS = Object.freeze({
   title: 256,
@@ -74,14 +73,6 @@ export function buildProfilePayload({
   profileImage = undefined,
   includeStatus = true,
 } = {}) {
-  const preset = presetForCardArtMarker(profile?.profile_image);
-  const appliedTheme = preset ? {
-    ...theme,
-    theme: preset.id,
-    primary_color: preset.primaryColor,
-    title: preset.title,
-    tags_emoji: preset.tagsEmoji,
-  } : theme;
   const name = nameFor(member, user, displayName);
   const avatar = avatarFor(member, user, avatarUrl);
   const { imageUrl, files } = imagePayload(profileImage === undefined ? profile?.profile_image : profileImage);
@@ -90,8 +81,8 @@ export function buildProfilePayload({
   if (about) fields.push({ name: 'About', value: about, inline: false });
   if (profile?.pronouns) fields.push({ name: 'Pronouns', value: safeDisplayText(profile.pronouns, { maxLength: EMBED_LIMITS.fieldValue }), inline: true });
   if (profile?.open_to) fields.push({ name: 'Open to', value: safeDisplayText(profile.open_to, { maxLength: EMBED_LIMITS.fieldValue }), inline: true });
-  const interestLabel = appliedTheme?.tags_emoji
-    ? `${safeDisplayText(appliedTheme.tags_emoji, { maxLength: 8 })} Interests`
+  const interestLabel = theme?.tags_emoji
+    ? `${safeDisplayText(theme.tags_emoji, { maxLength: 8 })} Interests`
     : 'Interests';
   fields.push({ name: interestLabel, value: compactTags(tags), inline: false });
   if (boundaries) fields.push({ name: 'Interaction notes (optional)', value: summarizeBoundaries(boundaries), inline: false });
@@ -100,10 +91,10 @@ export function buildProfilePayload({
     ? `Directory: ${profile?.discoverable ? 'visible' : 'private'} · Requests: ${profile?.allow_requests ? 'open' : 'closed'}`
     : null;
   const embed = new EmbedBuilder()
-    .setColor(colorFromTheme(appliedTheme))
+    .setColor(colorFromTheme(theme))
     .setAuthor({ name: safeDisplayText(`${name}’s profile`, { maxLength: EMBED_LIMITS.title }), iconURL: avatar || undefined })
     .addFields(fields);
-  if (appliedTheme?.title) embed.setTitle(safeDisplayText(appliedTheme.title, { maxLength: EMBED_LIMITS.title }));
+  if (theme?.title) embed.setTitle(safeDisplayText(theme.title, { maxLength: EMBED_LIMITS.title }));
   if (status) embed.setFooter({ text: safeDisplayText(status, { maxLength: EMBED_LIMITS.footer }) });
   if (imageUrl) embed.setImage(imageUrl);
   else if (avatar) embed.setThumbnail(avatar);

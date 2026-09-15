@@ -10,7 +10,7 @@ import {
   presetForCardArtMarker,
 } from '../src/profile-presets.js';
 
-test('photo registry is complete, immutable, and carries theme-ready metadata', async () => {
+test('photo registry is complete, immutable, and contains only fallback-photo metadata', async () => {
   assert.deepEqual(CARD_ART_PRESETS.map((preset) => preset.id), [
     'moss-room', 'windowseat', 'field-notes', 'arcade-glow', 'night-walk', 'constellation',
   ]);
@@ -19,9 +19,9 @@ test('photo registry is complete, immutable, and carries theme-ready metadata', 
     assert.equal(Object.isFrozen(preset), true);
     assert.match(preset.name, /\S/);
     assert.match(preset.description, /\S/);
-    assert.match(preset.primaryColor, /^#[0-9a-f]{6}$/i);
-    assert.match(preset.title, /\S/);
-    assert.match(preset.tagsEmoji, /\S/);
+    assert.equal('primaryColor' in preset, false);
+    assert.equal('title' in preset, false);
+    assert.equal('tagsEmoji' in preset, false);
     assert.match(preset.assetFilename, /^[a-z0-9-]+\.jpg$/);
     const bytes = await fs.readFile(path.join(assets, preset.assetFilename));
     assert.deepEqual([...bytes.subarray(0, 3)], [0xff, 0xd8, 0xff]);

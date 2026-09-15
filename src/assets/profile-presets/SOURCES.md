@@ -1,8 +1,8 @@
 # Bundled photo sources
 
 All six images are original photographs taken and supplied by the project owner
-on September 14, 2026 for use as Bio's built-in profile defaults. No generated
-or stock artwork is included.
+on September 14, 2026 for use as optional preselected backups in Bio. No
+generated or stock artwork is included.
 
 | Asset | Supplied photo |
 |---|---|

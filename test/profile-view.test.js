@@ -37,16 +37,16 @@ test('uses a local image descriptor as a Discord attachment and limits long text
   assert.ok(embed.fields[0].value.endsWith('…'));
 });
 
-test('a persisted photo marker uses the current bundled theme metadata', () => {
+test('a preselected photo leaves the member chosen vibe and title intact', () => {
   const payload = buildProfilePayload({
     profile: { profile_image: 'preset:moss-room' },
     tags: ['hiking'],
-    theme: { primary_color: '#000000', title: 'Old preset title', tags_emoji: 'x' },
+    theme: { primary_color: '#456789', title: 'My rainy-day corner', tags_emoji: '🫖' },
     displayName: 'Mika',
     profileImage: { attachment: 'canopy.jpg', name: 'profile-preset-moss-room.jpg' },
   });
   const embed = payload.embeds[0].toJSON();
-  assert.equal(embed.title, 'Canopy');
-  assert.equal(embed.color, 0x58704C);
-  assert.equal(embed.fields.at(-1).name, '🌿 Interests');
+  assert.equal(embed.title, 'My rainy-day corner');
+  assert.equal(embed.color, 0x456789);
+  assert.equal(embed.fields.at(-1).name, '🫖 Interests');
 });

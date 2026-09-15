@@ -5,7 +5,9 @@ import {
   Client,
   EmbedBuilder,
   Events,
+  FileUploadBuilder,
   GatewayIntentBits,
+  LabelBuilder,
   MessageFlags,
   ModalBuilder,
   Partials,
@@ -21,7 +23,8 @@ import { createGatherService } from './gather.js';
 import { buildProfilePayload } from './profile-view.js';
 import { buildBoundariesEmbed } from './modules/boundaries/embed.js';
 import { createBoundariesController } from './modules/boundaries/wizard.js';
-import { CARD_ART_PRESETS, getCardArtPreset, markerForCardArt } from './profile-presets.js';
+import { CARD_ART_PRESETS, getCardArtPreset, markerForCardArt, presetForCardArtMarker } from './profile-presets.js';
+import { PROFILE_VIBES, getProfileVibe } from './profile-vibes.js';
 
 const PRIVATE = MessageFlags.Ephemeral;
 const NO_MENTIONS = Object.freeze({ parse: [], repliedUser: false });
@@ -94,7 +97,7 @@ function homeRows(ownerId, { hasProfile = true } = {}) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`bio:edit:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Edit card'),
-      new ButtonBuilder().setCustomId(`bio:style:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Picture & style'),
+      new ButtonBuilder().setCustomId(`bio:style:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Photo, vibe & title'),
       new ButtonBuilder().setCustomId(`bio:sharing:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Sharing'),
     ),
     new ActionRowBuilder().addComponents(
@@ -128,17 +131,73 @@ function backToBioRow(ownerId) {
   );
 }
 
-function styleRows(ownerId) {
+function styleRows(ownerId, currentTheme = null) {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder().setCustomId(`style:preset:${ownerId}`).setPlaceholder('Choose a mood photo')
-        .addOptions(CARD_ART_PRESETS.map((preset) => ({ label: preset.name, value: preset.id, description: preset.description.slice(0, 100) }))),
+      new ButtonBuilder().setCustomId(`style:upload:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Upload your own photo'),
     ),
     new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`style:vibe:${ownerId}`).setPlaceholder('Choose your general vibe')
+        .addOptions(PROFILE_VIBES.map((vibe) => ({
+          label: vibe.name,
+          value: vibe.id,
+          description: vibe.description,
+          default: currentTheme?.theme === vibe.id,
+        }))),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`style:title:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Choose a title'),
+      new ButtonBuilder().setCustomId(`style:presets:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Preselected photos'),
       new ButtonBuilder().setCustomId(`style:remove:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Use Discord avatar'),
+    ),
+    new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`bio:home:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to Bio'),
     ),
   ];
+}
+
+function preselectedPhotoRows(ownerId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`style:preset:${ownerId}`).setPlaceholder('Choose a preselected photo')
+        .addOptions(CARD_ART_PRESETS.map((preset) => ({ label: preset.name, value: preset.id, description: preset.description.slice(0, 100) }))),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`style:home:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to photo options'),
+    ),
+  ];
+}
+
+function photoUploadModal(ownerId) {
+  const upload = new FileUploadBuilder()
+    .setCustomId('photo')
+    .setRequired(true)
+    .setMinValues(1)
+    .setMaxValues(1);
+  return new ModalBuilder()
+    .setCustomId(`style:upload:${ownerId}`)
+    .setTitle('Upload your own photo')
+    .addLabelComponents(
+      new LabelBuilder()
+        .setLabel('Choose a photo')
+        .setDescription('PNG, JPEG, GIF, or WebP · up to 5 MB')
+        .setFileUploadComponent(upload),
+    );
+}
+
+function titleModal(ownerId, currentTitle = '') {
+  const title = new TextInputBuilder()
+    .setCustomId('title')
+    .setLabel('Card title (optional)')
+    .setPlaceholder('e.g. always down for side quests')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(80);
+  if (currentTitle) title.setValue(String(currentTitle).slice(0, 80));
+  return new ModalBuilder()
+    .setCustomId(`style:title:${ownerId}`)
+    .setTitle('Choose your title')
+    .addComponents(new ActionRowBuilder().addComponents(title));
 }
 
 function setupRows(ownerId) {
@@ -331,7 +390,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     }
     const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
     return respond({
-      content: uploaded ? 'Saved your picture. Your card is still private until you change Sharing.' : 'This is your private Bio home. Interaction notes are optional and always last.',
+      content: uploaded ? 'Saved your photo. Your vibe and title stayed the same. Your card is still private until you change Sharing.' : 'This is your private Bio home. Interaction notes are optional and always last.',
       ...payload,
       components: homeRows(interaction.user.id),
     });
@@ -343,18 +402,44 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     return interaction.showModal(profileModal(profile ? { ...profile, open_to: profile.open_to || suggestedOpenTo } : { open_to: suggestedOpenTo }, tags, interaction.user.id));
   }
 
+  function styleSummary(profile, theme) {
+    const selectedPhoto = presetForCardArtMarker(profile?.profile_image);
+    const photo = selectedPhoto?.name || (profile?.profile_image ? 'Your photo' : 'Discord avatar');
+    const vibe = getProfileVibe(theme?.theme)?.name || (theme?.primary_color || theme?.tags_emoji ? 'Custom' : 'Bio classic');
+    const title = theme?.title ? 'Set' : 'None yet';
+    return `Photo: **${photo}** · Vibe: **${vibe}** · Title: **${title}**`;
+  }
+
+  async function showStyleHome(interaction, content = '') {
+    const profile = await ensureProfile(store, interaction.guildId, interaction.user.id);
+    const theme = store.getTheme(interaction.guildId, interaction.user.id);
+    const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
+    const introduction = 'Start with a photo of your own, then choose the general vibe and title around it. If you do not have an aesthetic photo ready, **Preselected photos** has six backups.';
+    const response = withNoMentions({
+      content: `${content ? `${content}\n\n` : ''}${introduction}\n${styleSummary(profile, theme)}`,
+      ...payload,
+      components: styleRows(interaction.user.id, theme),
+    });
+    if (interaction.deferred) return interaction.editReply(response);
+    return interaction.update(response);
+  }
+
+  async function showPreselectedPhotos(interaction) {
+    const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
+    return interaction.update(withNoMentions({
+      content: 'No photo ready yet? These six owner-shot photos are here as backups. Choose one now, then replace it with your own whenever you want.',
+      ...payload,
+      components: preselectedPhotoRows(interaction.user.id),
+    }));
+  }
+
   async function handleBio(interaction) {
     const picture = interaction.options.getAttachment?.('picture');
     if (picture) {
       await interaction.deferReply({ flags: PRIVATE });
       await ensureProfile(store, interaction.guildId, interaction.user.id);
       const marker = await media.save(interaction.guildId, interaction.user.id, picture);
-      store.transaction(() => {
-        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: marker });
-        store.updateTheme(interaction.guildId, interaction.user.id, {
-          theme: null, primary_color: null, secondary_color: null, title: null, tags_emoji: null,
-        });
-      });
+      store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: marker });
       return showBioHome(interaction, { uploaded: true });
     }
     return showBioHome(interaction);
@@ -370,12 +455,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     }
     if (action === 'write' || action === 'edit') return openProfileEditor(interaction);
     if (action === 'home') return showBioHome(interaction);
-    if (action === 'style') {
-      return interaction.update(withNoMentions({
-        content: 'Choose a built-in mood photo, use your Discord avatar, or upload your own with `/bio picture:`. The built-in photos are real photographs from the bot owner, offered as starting points. Choosing one removes any uploaded Bio image.',
-        components: styleRows(interaction.user.id), embeds: [],
-      }));
-    }
+    if (action === 'style') return showStyleHome(interaction);
     if (action === 'sharing') {
       const profile = await ensureProfile(store, interaction.guildId, interaction.user.id);
       return interaction.update(withNoMentions({
@@ -402,34 +482,68 @@ export function createInteractionHandler({ store, media, connections, gather, bo
   async function handleStyleComponent(interaction) {
     const [, action, ownerId] = interaction.customId.split(':');
     if (ownerId !== interaction.user.id) throw new RangeError('That style control belongs to someone else.');
+    if (action === 'home') return showStyleHome(interaction);
+    if (action === 'upload') return interaction.showModal(photoUploadModal(interaction.user.id));
+    if (action === 'title') {
+      const theme = store.getTheme(interaction.guildId, interaction.user.id);
+      return interaction.showModal(titleModal(interaction.user.id, theme?.title));
+    }
+    if (action === 'presets') return showPreselectedPhotos(interaction);
+    if (action === 'vibe') {
+      const vibe = getProfileVibe(interaction.values?.[0]);
+      if (!vibe) throw new RangeError('Choose a valid vibe.');
+      await ensureProfile(store, interaction.guildId, interaction.user.id);
+      store.updateTheme(interaction.guildId, interaction.user.id, {
+        theme: vibe.id,
+        primary_color: vibe.primaryColor,
+        secondary_color: vibe.secondaryColor,
+        tags_emoji: vibe.tagsEmoji,
+      });
+      return showStyleHome(interaction, `${vibe.name} is now your card’s general vibe. Your photo and title stayed the same.`);
+    }
     if (action === 'preset') {
       const preset = getCardArtPreset(interaction.values?.[0]);
       if (!preset) throw new RangeError('Choose a valid photo preset.');
-      store.transaction(() => {
-        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: markerForCardArt(preset.id) });
-        store.updateTheme(interaction.guildId, interaction.user.id, {
-          theme: preset.id, primary_color: preset.primaryColor, secondary_color: null, title: preset.title, tags_emoji: preset.tagsEmoji,
-        });
-      });
+      store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: markerForCardArt(preset.id) });
       try { await media.remove(interaction.guildId, interaction.user.id); } catch (error) {
         logger.warn?.('Could not clean up a replaced Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
       }
-      const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
-      return interaction.update(withNoMentions({ content: `${preset.name} is now your card’s mood photo.`, ...payload, components: styleRows(interaction.user.id) }));
+      return showStyleHome(interaction, `${preset.name} is now your backup photo. Your vibe and title stayed the same.`);
     }
     if (action === 'remove') {
-      store.transaction(() => {
-        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: null });
-        store.updateTheme(interaction.guildId, interaction.user.id, {
-          theme: null, primary_color: null, secondary_color: null, title: null, tags_emoji: null,
-        });
-      });
+      store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: null });
       try { await media.remove(interaction.guildId, interaction.user.id); } catch (error) {
         logger.warn?.('Could not clean up a removed Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
       }
-      const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
-      return interaction.update(withNoMentions({ content: 'Your card now uses your Discord avatar. You can choose a built-in photo anytime.', ...payload, components: styleRows(interaction.user.id) }));
+      return showStyleHome(interaction, 'Your card now uses your Discord avatar. Your vibe and title stayed the same.');
     }
+  }
+
+  async function handleStyleModal(interaction) {
+    const [, action, ownerId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('That style editor belongs to someone else.');
+    if (action === 'upload') {
+      const uploads = interaction.fields.getUploadedFiles('photo', true);
+      const picture = uploads.first?.() || uploads.values().next().value;
+      if (!picture) throw new RangeError('Choose an image to upload.');
+      await interaction.deferReply({ flags: PRIVATE });
+      await ensureProfile(store, interaction.guildId, interaction.user.id);
+      try {
+        const marker = await media.save(interaction.guildId, interaction.user.id, picture);
+        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: marker });
+      } catch (error) {
+        return showStyleHome(interaction, friendlyError(error));
+      }
+      return showStyleHome(interaction, 'Saved your photo. Choose a vibe and title next, or keep what you already had.');
+    }
+    if (action === 'title') {
+      const title = String(interaction.fields.getTextInputValue('title') || '').trim();
+      await interaction.deferReply({ flags: PRIVATE });
+      await ensureProfile(store, interaction.guildId, interaction.user.id);
+      store.updateTheme(interaction.guildId, interaction.user.id, { title: title || null });
+      return showStyleHome(interaction, title ? 'Saved your title. Your photo and vibe stayed the same.' : 'Removed your title. Your photo and vibe stayed the same.');
+    }
+    throw new RangeError('That style editor is no longer available.');
   }
 
   async function handleSharingPreset(interaction) {
@@ -530,7 +644,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     });
     const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
     await interaction.editReply(withNoMentions({
-      content: existed ? 'Profile saved. Choose a quick sharing preset below, or leave your choices as they are.' : 'Profile saved privately. Choose a quick sharing preset below, or keep it private. Picture & style is ready when you want it.',
+      content: existed ? 'Profile saved. Choose a quick sharing preset below, or leave your choices as they are.' : 'Profile saved privately. Choose a quick sharing preset below, or keep it private. Photo, vibe & title is ready when you want it.',
       ...payload,
       components: [...sharingRows(interaction.user.id), ...homeRows(interaction.user.id)],
     }));
@@ -920,7 +1034,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         .setTitle('Bio')
         .setDescription('A member directory for finding shared interests and making contact by choice.')
         .addFields(
-          { name: 'Start', value: '`/bio` opens your private home. Write a card, choose a mood photo or your own picture, then decide how it is shared.' },
+          { name: 'Start', value: '`/bio` opens your private home. Upload your own photo, choose a general vibe and title, then decide how the card is shared. Preselected photos are there if you need one.' },
           { name: 'Find people', value: '`/find` quietly shows opted-in people and server interests. Right-click a member and choose **View Bio** for a direct look.' },
           { name: 'Make contact', value: '`/connect member:@someone` sends a private request they can accept, decline, or block.' },
           { name: 'Invite a group', value: '`/invite` shows a private preview before it notifies opted-in members.' },
@@ -955,6 +1069,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       if (interaction.isModalSubmit?.()) {
         if (interaction.customId.startsWith('bdry:')) return await boundaries.handleModal(interaction);
         if (interaction.customId.startsWith('profile:')) return await handleProfileModal(interaction);
+        if (interaction.customId.startsWith('style:')) return await handleStyleModal(interaction);
         if (interaction.customId.startsWith('setup:')) return await handleSetupModal(interaction);
         if (interaction.customId.startsWith('connect:request:')) {
           const targetId = interaction.customId.split(':')[2];
