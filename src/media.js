@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { presetForCardArtMarker } from './profile-presets.js';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_TYPES = new Map([
@@ -9,6 +11,7 @@ const IMAGE_TYPES = new Map([
   ['image/webp', 'webp'],
 ]);
 const EXTENSIONS = new Set(IMAGE_TYPES.values());
+const bundledCardArtDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), 'assets', 'profile-presets');
 
 function assertSnowflake(value, label) {
   if (!/^\d{1,24}$/.test(String(value))) {
@@ -150,6 +153,22 @@ export function createMediaStore({ dataDir, fetchImpl = globalThis.fetch, maxByt
   async function resolve(marker, guildId, userId) {
     if (!marker) return null;
     if (/^https?:\/\//i.test(marker)) return { file: null, url: marker };
+
+    const preset = presetForCardArtMarker(marker);
+    if (preset) {
+      const file = path.resolve(bundledCardArtDirectory, preset.assetFilename);
+      if (!file.startsWith(`${bundledCardArtDirectory}${path.sep}`)) return null;
+      try {
+        const stat = await fs.lstat(file);
+        if (!stat.isFile() || stat.isSymbolicLink()) return null;
+      } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      }
+      const name = `card-art-${preset.id}.png`;
+      return { file: { attachment: file, name }, url: `attachment://${name}` };
+    }
+
     const user = assertSnowflake(userId, 'User ID');
     const { guild, root } = await guildDirectory(guildId);
     const match = /^local:profile-images\/(\d{1,24})\/(\d{1,24})\.(png|jpg|gif|webp)$/.exec(marker);

@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { safeDisplayText } from './domain.js';
+import { summarizeBoundaries } from './modules/boundaries/embed.js';
 
 const EMBED_LIMITS = Object.freeze({
   title: 256,
@@ -80,8 +81,11 @@ export function buildProfilePayload({
   if (about) fields.push({ name: 'About', value: about, inline: false });
   if (profile?.pronouns) fields.push({ name: 'Pronouns', value: safeDisplayText(profile.pronouns, { maxLength: EMBED_LIMITS.fieldValue }), inline: true });
   if (profile?.open_to) fields.push({ name: 'Open to', value: safeDisplayText(profile.open_to, { maxLength: EMBED_LIMITS.fieldValue }), inline: true });
-  fields.push({ name: 'Interests', value: compactTags(tags), inline: false });
-  if (boundaries) fields.push({ name: 'Interaction notes', value: 'Available to people this member has chosen to share with.', inline: false });
+  const interestLabel = theme?.tags_emoji
+    ? `${safeDisplayText(theme.tags_emoji, { maxLength: 8 })} Interests`
+    : 'Interests';
+  fields.push({ name: interestLabel, value: compactTags(tags), inline: false });
+  if (boundaries) fields.push({ name: 'Interaction notes (optional)', value: summarizeBoundaries(boundaries), inline: false });
 
   const status = includeStatus
     ? `Directory: ${profile?.discoverable ? 'visible' : 'private'} · Requests: ${profile?.allow_requests ? 'open' : 'closed'}`
@@ -90,6 +94,7 @@ export function buildProfilePayload({
     .setColor(colorFromTheme(theme))
     .setAuthor({ name: safeDisplayText(`${name}’s profile`, { maxLength: EMBED_LIMITS.title }), iconURL: avatar || undefined })
     .addFields(fields);
+  if (theme?.title) embed.setTitle(safeDisplayText(theme.title, { maxLength: EMBED_LIMITS.title }));
   if (status) embed.setFooter({ text: safeDisplayText(status, { maxLength: EMBED_LIMITS.footer }) });
   if (imageUrl) embed.setImage(imageUrl);
   else if (avatar) embed.setThumbnail(avatar);

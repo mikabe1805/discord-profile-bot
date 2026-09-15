@@ -6,16 +6,20 @@ test('builds a calm compact profile card from saved profile data', () => {
   const payload = buildProfilePayload({
     profile: { bio: 'hi @everyone', pronouns: 'they/them', open_to: 'games', discoverable: true, allow_requests: true },
     tags: [{ display_name: 'Board games' }, { display_name: 'Art' }],
-    theme: { primary_color: '#6f8060' },
-    boundaries: { privacy_level: 'members' },
+    theme: { primary_color: '#6f8060', title: 'Field Notes', tags_emoji: '✎' },
+    boundaries: { privacy_level: 'members', data: { new_dms: 'ask_first', notes: 'please ping first @everyone' } },
     displayName: 'Mika',
     avatarUrl: 'https://cdn.example/avatar.png',
   });
   const embed = payload.embeds[0].toJSON();
   assert.equal(embed.color, 0x6f8060);
   assert.equal(embed.author.name, 'Mika’s profile');
+  assert.equal(embed.title, 'Field Notes');
   assert.equal(embed.fields[0].value, 'hi @\u200beveryone');
-  assert.equal(embed.fields.find((field) => field.name === 'Interests').value, 'Board games · Art');
+  assert.equal(embed.fields.find((field) => field.name === '✎ Interests').value, 'Board games · Art');
+  assert.equal(embed.fields.at(-1).name, 'Interaction notes (optional)');
+  assert.match(embed.fields.at(-1).value, /New DMs: .*Ask first/);
+  assert.match(embed.fields.at(-1).value, /@\u200beveryone/);
   assert.match(embed.footer.text, /Directory: visible/);
   assert.equal(embed.thumbnail.url, 'https://cdn.example/avatar.png');
 });

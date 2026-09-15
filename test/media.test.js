@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createMediaStore, MAX_IMAGE_BYTES } from '../src/media.js';
+import { markerForCardArt } from '../src/profile-presets.js';
 
 const guildId = '1311683455020564500';
 const userId = '1416081968537538640';
@@ -64,6 +65,21 @@ test('enforces the streamed byte limit and treats legacy URLs as read-only', asy
   const limited = createMediaStore({ dataDir, fetchImpl: async () => response(Buffer.alloc(9), { length: 1 }), maxBytes: 8 });
   await assert.rejects(limited.save(guildId, userId, { url: 'https://cdn.discordapp.com/file', contentType: 'image/png', size: 1 }), /larger than 5 MB/);
   assert.deepEqual(await store.resolve('https://example.com/legacy-image.png', guildId, userId), { file: null, url: 'https://example.com/legacy-image.png' });
+});
+
+test('resolves a strict bundled card-art marker without creating guild storage', async (t) => {
+  const dataDir = path.join(os.tmpdir(), `profile-media-unused-${Date.now()}-${Math.random()}`);
+  const store = createMediaStore({ dataDir, fetchImpl: async () => response(png) });
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+
+  const resolved = await store.resolve(markerForCardArt('windowseat'), 'not-a-guild', 'not-a-user');
+  assert.equal(resolved.url, 'attachment://card-art-windowseat.png');
+  assert.equal(resolved.file.name, 'card-art-windowseat.png');
+  assert.match(resolved.file.attachment, /assets[\\/]profile-presets[\\/]windowseat\.png$/);
+  assert.equal((await fs.stat(resolved.file.attachment)).isFile(), true);
+  await assert.rejects(fs.access(dataDir));
+  assert.equal(await store.resolve('preset:windowseat.png', guildId, userId), null);
+  assert.equal(await store.resolve('preset:windowseat/../night-walk', guildId, userId), null);
 });
 
 test('does not follow local-marker traversal or symlinked image files', async (t) => {

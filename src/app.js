@@ -10,8 +10,10 @@ import {
   ModalBuilder,
   Partials,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
+  UserSelectMenuBuilder,
 } from 'discord.js';
 import { createConnectionService } from './connections.js';
 import { canViewBoundaries, normalizeInterestSlug, parseInterests, safeDisplayText } from './domain.js';
@@ -19,6 +21,7 @@ import { createGatherService } from './gather.js';
 import { buildProfilePayload } from './profile-view.js';
 import { buildBoundariesEmbed } from './modules/boundaries/embed.js';
 import { createBoundariesController } from './modules/boundaries/wizard.js';
+import { CARD_ART_PRESETS, getCardArtPreset, markerForCardArt } from './profile-presets.js';
 
 const PRIVATE = MessageFlags.Ephemeral;
 const NO_MENTIONS = Object.freeze({ parse: [], repliedUser: false });
@@ -65,6 +68,129 @@ function profileModal(profile, tags, ownerId) {
       input('open_to', 'What are you open to?', 200, profile?.open_to, TextInputStyle.Paragraph),
       input('interests', 'Interests, separated by commas', 2000, tags.map((tag) => tag.display_name).join(', ')),
     );
+}
+
+const PATHS = Object.freeze({
+  meet: { label: 'Meet people', description: 'Casual conversation and new friends', openTo: 'casual conversation and meeting new people' },
+  play: { label: 'Find people to play with', description: 'Games, campaigns, and pickup sessions', openTo: 'co-op games, campaigns, or game nights' },
+  make: { label: 'Make things together', description: 'Creative projects and useful feedback', openTo: 'creative projects, collaboration, and sharing feedback' },
+  study: { label: 'Study together', description: 'Study sessions and project help', openTo: 'study sessions, project help, and accountability' },
+  card: { label: 'Just make my card', description: 'Start private and decide the rest later', openTo: '' },
+});
+
+const STARTER_PACKS = Object.freeze({
+  community: ['Introductions', 'Local events', 'Food', 'Music'],
+  study: ['Study buddies', 'Homework', 'Project help', 'Accountability'],
+  creative: ['Art', 'Writing', 'Photography', 'Music making'],
+  gaming: ['Co-op games', 'Board games', 'RPGs', 'Game nights'],
+});
+
+function homeRows(ownerId, { hasProfile = true } = {}) {
+  if (!hasProfile) return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`bio:write:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Write from scratch'),
+    ),
+  ];
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`bio:edit:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Edit card'),
+      new ButtonBuilder().setCustomId(`bio:style:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Picture & style'),
+      new ButtonBuilder().setCustomId(`bio:sharing:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Sharing'),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`bio:more:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('More'),
+      new ButtonBuilder().setCustomId(`bio:notes:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Interaction notes (optional)'),
+    ),
+  ];
+}
+
+function pathSelect(ownerId) {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder().setCustomId(`bio:path:${ownerId}`)
+      .setPlaceholder('What are you here for?')
+      .addOptions(Object.entries(PATHS).map(([value, path]) => ({ label: path.label, description: path.description, value }))),
+  );
+}
+
+function sharingRows(ownerId) {
+  const option = (preset, label, style) => new ButtonBuilder()
+    .setCustomId(`share:${preset}:${ownerId}`).setStyle(style).setLabel(label);
+  return [new ActionRowBuilder().addComponents(
+    option('private', 'Private for now', ButtonStyle.Secondary),
+    option('hellos', 'Open to hellos', ButtonStyle.Primary),
+    option('groups', 'Open to groups', ButtonStyle.Success),
+  )];
+}
+
+function backToBioRow(ownerId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`bio:home:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to Bio'),
+  );
+}
+
+function styleRows(ownerId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`style:preset:${ownerId}`).setPlaceholder('Choose card art')
+        .addOptions(CARD_ART_PRESETS.map((preset) => ({ label: preset.name, value: preset.id, description: preset.description.slice(0, 100) }))),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`style:remove:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Use Discord avatar'),
+      new ButtonBuilder().setCustomId(`bio:home:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Back to Bio'),
+    ),
+  ];
+}
+
+function setupRows(ownerId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`setup:pack:${ownerId}`).setPlaceholder('Add a starter interest pack')
+        .addOptions(Object.keys(STARTER_PACKS).map((value) => ({ label: `${value[0].toUpperCase()}${value.slice(1)} pack`, value }))),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`setup:add:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Add interests'),
+      new ButtonBuilder().setCustomId(`setup:remove:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Remove interests'),
+      new ButtonBuilder().setCustomId(`setup:limit:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Profile size'),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`setup:tags:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Toggle member suggestions'),
+      new ButtonBuilder().setCustomId(`setup:gathers:${ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Toggle group invites'),
+      new ButtonBuilder().setCustomId(`setup:post:${ownerId}`).setStyle(ButtonStyle.Primary).setLabel('Post start card here'),
+    ),
+  ];
+}
+
+function setupInterestsModal(action, ownerId) {
+  const adding = action === 'add';
+  const names = new TextInputBuilder()
+    .setCustomId('interests')
+    .setLabel(adding ? 'Interest names, separated by commas' : 'Interest names to remove')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(1000);
+  const modal = new ModalBuilder()
+    .setCustomId(`setup:${action}:${ownerId}`)
+    .setTitle(adding ? 'Add server interests' : 'Remove server interests')
+    .addComponents(new ActionRowBuilder().addComponents(names));
+  if (adding) {
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('category').setLabel('Category (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(32),
+    ));
+  }
+  return modal;
+}
+
+function setupLimitModal(ownerId, currentLimit) {
+  const limit = new TextInputBuilder()
+    .setCustomId('limit')
+    .setLabel('Interests allowed on each profile (1–30)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(2)
+    .setValue(String(currentLimit));
+  return new ModalBuilder().setCustomId(`setup:limit:${ownerId}`).setTitle('Profile interest limit')
+    .addComponents(new ActionRowBuilder().addComponents(limit));
 }
 
 function connectModal(targetId) {
@@ -129,7 +255,7 @@ async function memberFor(guild, userId) {
   try { return await guild.members.fetch(userId); } catch { return null; }
 }
 
-async function profilePayload({ store, media, interaction, userId, includeStatus = true }) {
+async function profilePayload({ store, media, interaction, userId, includeStatus = true, includeBoundaries = true }) {
   const profile = store.getProfile(interaction.guildId, userId);
   if (!profile) throw new RangeError('That member has not made a profile yet.');
   const member = await memberFor(interaction.guild, userId);
@@ -138,7 +264,7 @@ async function profilePayload({ store, media, interaction, userId, includeStatus
   const theme = store.getTheme(interaction.guildId, userId);
   const boundary = store.getBoundaries(interaction.guildId, userId);
   const viewerMember = await memberFor(interaction.guild, interaction.user.id);
-  const visibleBoundary = boundary && canViewBoundaries({
+  const visibleBoundary = includeBoundaries && boundary && canViewBoundaries({
     ownerId: userId,
     viewerId: interaction.user.id,
     privacyLevel: boundary.privacy_level,
@@ -166,6 +292,8 @@ function requireManageGuild(interaction) {
 }
 
 export function createInteractionHandler({ store, media, connections, gather, boundaries, logger = console }) {
+  const invitationDrafts = new Map();
+  let invitationDraftSequence = 0;
   async function handleAutocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
     const pieces = String(focused.value || '').split(',');
@@ -185,8 +313,139 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       throw new RangeError('That member has kept their profile private.');
     }
     await interaction.deferReply(shared ? {} : { flags: PRIVATE });
-    const payload = await profilePayload({ store, media, interaction, userId, includeStatus: true });
+    const payload = await profilePayload({ store, media, interaction, userId, includeStatus: true, includeBoundaries: !shared });
     return interaction.editReply(withNoMentions(payload));
+  }
+
+  async function showBioHome(interaction, { uploaded = false, forcePrivate = false } = {}) {
+    const respond = (payload) => (!forcePrivate && (interaction.isButton?.() || interaction.isStringSelectMenu?.()))
+      ? interaction.update(withNoMentions(payload))
+      : privateReply(interaction, payload);
+    const profile = store.getProfile(interaction.guildId, interaction.user.id);
+    if (!profile) {
+      return respond({
+        embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Make a small corner of this server yours')
+          .setDescription('Bio starts private. Pick a reason to begin, write a card, then choose exactly how people can find or contact you.')],
+        components: [pathSelect(interaction.user.id), ...homeRows(interaction.user.id, { hasProfile: false })],
+      });
+    }
+    const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
+    return respond({
+      content: uploaded ? 'Saved your picture. Your card is still private until you change Sharing.' : 'This is your private Bio home. Interaction notes are optional and always last.',
+      ...payload,
+      components: homeRows(interaction.user.id),
+    });
+  }
+
+  async function openProfileEditor(interaction, suggestedOpenTo = '') {
+    const profile = store.getProfile(interaction.guildId, interaction.user.id);
+    const tags = profile ? store.listUserTags(interaction.guildId, interaction.user.id) : [];
+    return interaction.showModal(profileModal(profile ? { ...profile, open_to: profile.open_to || suggestedOpenTo } : { open_to: suggestedOpenTo }, tags, interaction.user.id));
+  }
+
+  async function handleBio(interaction) {
+    const picture = interaction.options.getAttachment?.('picture');
+    if (picture) {
+      await interaction.deferReply({ flags: PRIVATE });
+      await ensureProfile(store, interaction.guildId, interaction.user.id);
+      const marker = await media.save(interaction.guildId, interaction.user.id, picture);
+      store.transaction(() => {
+        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: marker });
+        store.updateTheme(interaction.guildId, interaction.user.id, {
+          theme: null, primary_color: null, secondary_color: null, title: null, tags_emoji: null,
+        });
+      });
+      return showBioHome(interaction, { uploaded: true });
+    }
+    return showBioHome(interaction);
+  }
+
+  async function handleBioComponent(interaction) {
+    const [, action, ownerId] = interaction.customId.split(':');
+    if (ownerId && ownerId !== interaction.user.id) throw new RangeError('That Bio control belongs to someone else.');
+    if (action === 'path') {
+      const path = interaction.values?.[0];
+      const suggested = PATHS[path]?.openTo || '';
+      return openProfileEditor(interaction, suggested);
+    }
+    if (action === 'write' || action === 'edit') return openProfileEditor(interaction);
+    if (action === 'home') return showBioHome(interaction);
+    if (action === 'style') {
+      return interaction.update(withNoMentions({
+        content: 'Choose bundled card art, use your Discord avatar, or upload your own image with `/bio picture:`. Choosing a preset removes any uploaded Bio image.',
+        components: styleRows(interaction.user.id), embeds: [],
+      }));
+    }
+    if (action === 'sharing') {
+      const profile = await ensureProfile(store, interaction.guildId, interaction.user.id);
+      return interaction.update(withNoMentions({
+        content: `Sharing is your choice. Current: directory ${profile.discoverable ? 'on' : 'off'}, requests ${profile.allow_requests ? 'on' : 'off'}, group invites ${profile.allow_group_pings ? 'on' : 'off'}.`,
+        components: [...sharingRows(interaction.user.id), ...preferenceRows(profile, interaction.user.id), backToBioRow(interaction.user.id)], embeds: [],
+      }));
+    }
+    if (action === 'notes') {
+      return boundaries.startEdit(interaction);
+    }
+    if (action === 'more') {
+      return interaction.update(withNoMentions({
+        content: 'Share your finished card in this channel, or remove your Bio data from this server.',
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`bio:share:${interaction.user.id}`).setStyle(ButtonStyle.Primary).setLabel('Share card here'),
+          new ButtonBuilder().setCustomId(`profile-delete:confirm:${interaction.user.id}`).setStyle(ButtonStyle.Danger).setLabel('Delete my Bio data'),
+          new ButtonBuilder().setCustomId(`bio:home:${interaction.user.id}`).setStyle(ButtonStyle.Secondary).setLabel('Back'),
+        )], embeds: [],
+      }));
+    }
+    if (action === 'share') return showProfile(interaction, interaction.user.id, { shared: true });
+  }
+
+  async function handleStyleComponent(interaction) {
+    const [, action, ownerId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('That style control belongs to someone else.');
+    if (action === 'preset') {
+      const preset = getCardArtPreset(interaction.values?.[0]);
+      if (!preset) throw new RangeError('Choose a valid card art preset.');
+      store.transaction(() => {
+        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: markerForCardArt(preset.id) });
+        store.updateTheme(interaction.guildId, interaction.user.id, {
+          theme: preset.id, primary_color: preset.primaryColor, secondary_color: null, title: preset.title, tags_emoji: preset.tagsEmoji,
+        });
+      });
+      try { await media.remove(interaction.guildId, interaction.user.id); } catch (error) {
+        logger.warn?.('Could not clean up a replaced Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
+      }
+      const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
+      return interaction.update(withNoMentions({ content: `${preset.name} is now the art on your card.`, ...payload, components: styleRows(interaction.user.id) }));
+    }
+    if (action === 'remove') {
+      store.transaction(() => {
+        store.saveProfile(interaction.guildId, interaction.user.id, { profile_image: null });
+        store.updateTheme(interaction.guildId, interaction.user.id, {
+          theme: null, primary_color: null, secondary_color: null, title: null, tags_emoji: null,
+        });
+      });
+      try { await media.remove(interaction.guildId, interaction.user.id); } catch (error) {
+        logger.warn?.('Could not clean up a removed Bio upload', { guildId: interaction.guildId, userId: interaction.user.id, error });
+      }
+      const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
+      return interaction.update(withNoMentions({ content: 'Your card now uses your Discord avatar. You can choose bundled art anytime.', ...payload, components: styleRows(interaction.user.id) }));
+    }
+  }
+
+  async function handleSharingPreset(interaction) {
+    const [, preset, ownerId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('Those sharing choices belong to someone else.');
+    const patches = {
+      private: { discoverable: false, allow_requests: false, allow_group_pings: false },
+      hellos: { discoverable: true, allow_requests: true, allow_group_pings: false },
+      groups: { discoverable: true, allow_requests: true, allow_group_pings: true },
+    };
+    if (!patches[preset]) throw new RangeError('That sharing choice no longer exists.');
+    const profile = store.updatePrivacy(interaction.guildId, interaction.user.id, patches[preset]);
+    return interaction.update(withNoMentions({
+      content: preset === 'private' ? 'Saved: private for now.' : preset === 'hellos' ? 'Saved: people can find you and send private requests.' : 'Saved: you are open to directory, private hellos, and matching group invites.',
+      components: [...sharingRows(interaction.user.id), ...preferenceRows(profile, interaction.user.id), backToBioRow(interaction.user.id)], embeds: [],
+    }));
   }
 
   async function handleProfile(interaction) {
@@ -271,9 +530,9 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     });
     const payload = await profilePayload({ store, media, interaction, userId: interaction.user.id });
     await interaction.editReply(withNoMentions({
-      content: existed ? 'Profile saved.' : 'Profile saved privately. Turn on only the ways you want people to find or contact you.',
+      content: existed ? 'Profile saved. Choose a quick sharing preset below, or leave your choices as they are.' : 'Profile saved privately. Choose a quick sharing preset below, or keep it private. Picture & style is ready when you want it.',
       ...payload,
-      components: preferenceRows(profile, interaction.user.id),
+      components: [...sharingRows(interaction.user.id), ...homeRows(interaction.user.id)],
     }));
     return tags;
   }
@@ -283,7 +542,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     if (ownerId !== interaction.user.id) throw new RangeError('Those preferences belong to someone else.');
     if (!['discoverable', 'allow_requests', 'allow_group_pings'].includes(field)) throw new RangeError('That preference no longer exists.');
     const profile = store.updatePrivacy(interaction.guildId, interaction.user.id, { [field]: rawValue === '1' });
-    await interaction.update(withNoMentions({ content: 'Saved. You can change these choices at any time.', components: preferenceRows(profile, ownerId), embeds: [] }));
+    await interaction.update(withNoMentions({ content: 'Saved. You can change these choices at any time.', components: [...sharingRows(ownerId), ...preferenceRows(profile, ownerId), backToBioRow(ownerId)], embeds: [] }));
   }
 
   async function handleDelete(interaction) {
@@ -295,16 +554,9 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     return interaction.update({ content: 'Your Bio data was deleted from this server.', components: [], embeds: [] });
   }
 
-  async function handleDiscover(interaction) {
+  async function handleFind(interaction) {
     await interaction.deferReply({ flags: PRIVATE });
-    const sub = interaction.options.getSubcommand();
-    if (sub === 'interests') {
-      const tags = store.listTags(interaction.guildId, 100);
-      if (!tags.length) return interaction.editReply(withNoMentions('This server has not added any interests yet.'));
-      const lines = tags.map((tag) => `${safeDisplayText(tag.display_name, { maxLength: 80 })} · ${tag.member_count}`);
-      return interaction.editReply(withNoMentions({ embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Interests in this server').setDescription(lines.join('\n').slice(0, 4096))] }));
-    }
-    const raw = interaction.options.getString('interest');
+    const raw = interaction.options?.getString?.('interest') || null;
     const tag = raw ? normalizeInterestSlug(raw) : null;
     const profiles = store.discoverProfiles(interaction.guildId, { tag, limit: 25 });
     const people = [];
@@ -316,9 +568,11 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       if (people.length === 10) break;
     }
     const heading = tag && store.getTag(interaction.guildId, tag)?.display_name;
+    const interestRows = tag ? [] : store.listTags(interaction.guildId, 18)
+      .map((entry) => `${safeDisplayText(entry.display_name, { maxLength: 70 })} · ${entry.member_count}`);
     return interaction.editReply(withNoMentions(people.length
-      ? { embeds: [new EmbedBuilder().setColor(0x786752).setTitle(heading ? `People into ${heading}` : 'People in this server').setDescription(people.join('\n\n').slice(0, 4096)).setFooter({ text: 'Looking here never notifies anyone.' })] }
-      : 'No opted-in members matched that search.'));
+      ? { embeds: [new EmbedBuilder().setColor(0x786752).setTitle(heading ? `People into ${heading}` : 'Browse people').setDescription(people.join('\n\n').slice(0, 4096)).addFields(interestRows.length ? [{ name: 'Interests in this server', value: interestRows.join(' · ').slice(0, 1024) }] : []).setFooter({ text: 'Looking here never notifies anyone.' })] }
+      : tag ? 'No opted-in members matched that interest.' : interestRows.length ? { embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Browse Bio').setDescription('No one has opened their card to the directory yet. These are the interests people can use when they do.').addFields({ name: 'Server interests', value: interestRows.join(' · ').slice(0, 1024) })] } : 'No one has opened their card to the directory yet. Try `/bio` to make the first one.'));
   }
 
   async function sendConnection(interaction, target, message) {
@@ -330,7 +584,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
   }
 
   async function connectionList(interaction, direction) {
-    await interaction.deferReply({ flags: PRIVATE });
+    if (!interaction.deferred) await interaction.deferReply({ flags: PRIVATE });
     const requests = direction === 'incoming'
       ? connections.listIncoming({ guildId: interaction.guildId, userId: interaction.user.id })
       : connections.listOutgoing({ guildId: interaction.guildId, userId: interaction.user.id });
@@ -354,22 +608,65 @@ export function createInteractionHandler({ store, media, connections, gather, bo
   }
 
   async function handleConnect(interaction) {
-    const sub = interaction.options.getSubcommand();
-    if (sub === 'request') return sendConnection(interaction, interaction.options.getUser('user', true), interaction.options.getString('message'));
-    if (sub === 'inbox') return connectionList(interaction, 'incoming');
-    if (sub === 'sent') return connectionList(interaction, 'outgoing');
-    const target = interaction.options.getUser('user', true);
-    if (target.id === interaction.user.id) throw new RangeError('Choose another member.');
-    if (sub === 'block') {
-      store.blockUser(interaction.guildId, interaction.user.id, target.id);
-      return privateReply(interaction, `${safeDisplayText(target.globalName || target.username, { maxLength: 80 })} can no longer send you requests.`);
+    let legacyAction = null;
+    try { legacyAction = interaction.options.getSubcommand?.(false) || null; } catch { legacyAction = null; }
+    if (legacyAction === 'inbox' || legacyAction === 'sent') return connectionList(interaction, legacyAction === 'inbox' ? 'incoming' : 'outgoing');
+    if (legacyAction === 'request') {
+      const legacyTarget = interaction.options.getUser('user', true);
+      if (legacyTarget.id === interaction.user.id) throw new RangeError('Choose another member.');
+      return sendConnection(interaction, legacyTarget, interaction.options.getString('message'));
     }
-    const removed = store.unblockUser(interaction.guildId, interaction.user.id, target.id);
-    return privateReply(interaction, removed ? 'Unblocked. They can send a request again if your requests are open.' : 'That member was not blocked.');
+    if (legacyAction === 'block' || legacyAction === 'unblock') {
+      const legacyTarget = interaction.options.getUser('user', true);
+      if (legacyTarget.id === interaction.user.id) throw new RangeError('Choose another member.');
+      if (legacyAction === 'block') {
+        store.blockUser(interaction.guildId, interaction.user.id, legacyTarget.id);
+        return privateReply(interaction, `Blocked ${safeDisplayText(legacyTarget.globalName || legacyTarget.username, { maxLength: 80 })}.`);
+      }
+      const removed = store.unblockUser(interaction.guildId, interaction.user.id, legacyTarget.id);
+      return privateReply(interaction, removed ? `Unblocked ${safeDisplayText(legacyTarget.globalName || legacyTarget.username, { maxLength: 80 })}.` : 'That member was not blocked by you.');
+    }
+    const target = interaction.options.getUser('member');
+    if (!target) {
+      if (interaction.options.getString?.('message')) throw new RangeError('Choose a member before adding a connection message.');
+      const incoming = connections.listIncoming({ guildId: interaction.guildId, userId: interaction.user.id });
+      const outgoing = connections.listOutgoing({ guildId: interaction.guildId, userId: interaction.user.id });
+      const buttons = [];
+      if (incoming.length) buttons.push(new ButtonBuilder().setCustomId(`conn:inbox:${interaction.user.id}`).setStyle(ButtonStyle.Primary).setLabel('Incoming'));
+      if (outgoing.length) buttons.push(new ButtonBuilder().setCustomId(`conn:sent:${interaction.user.id}`).setStyle(ButtonStyle.Secondary).setLabel('Sent'));
+      const components = [];
+      if (buttons.length) components.push(new ActionRowBuilder().addComponents(buttons));
+      components.push(new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder().setCustomId(`conn:unblock:${interaction.user.id}`).setPlaceholder('Choose someone to unblock').setMinValues(1).setMaxValues(1),
+      ));
+      return privateReply(interaction, {
+        embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Your connections').setDescription(
+          `**Incoming:** ${incoming.length ? `${incoming.length} request${incoming.length === 1 ? '' : 's'} waiting` : 'none'}\n**Sent:** ${outgoing.length ? `${outgoing.length} request${outgoing.length === 1 ? '' : 's'} waiting` : 'none'}\n\nUse **Request connection** from a member’s profile or run /connect with a member. The chooser below only removes blocks you previously made.`
+        )],
+        components,
+      });
+    }
+    if (target.id === interaction.user.id) throw new RangeError('Choose another member.');
+    return sendConnection(interaction, target, interaction.options.getString('message'));
   }
 
   async function handleConnectionComponent(interaction) {
     const [, action, rawId] = interaction.customId.split(':');
+    if (action === 'inbox' || action === 'sent') {
+      if (rawId !== interaction.user.id) throw new RangeError('That inbox belongs to someone else.');
+      await interaction.deferUpdate();
+      return connectionList(interaction, action === 'inbox' ? 'incoming' : 'outgoing');
+    }
+    if (action === 'unblock') {
+      if (!interaction.inGuild?.() || rawId !== interaction.user.id) throw new RangeError('That block control belongs to someone else.');
+      const targetId = interaction.values?.[0];
+      if (!targetId || targetId === interaction.user.id) throw new RangeError('Choose another member.');
+      const removed = store.unblockUser(interaction.guildId, interaction.user.id, targetId);
+      return interaction.update(withNoMentions({
+        content: removed ? `Unblocked <@${targetId}>.` : 'That member was not blocked by you.',
+        embeds: [], components: [],
+      }));
+    }
     const request = store.getConnectionRequest(rawId);
     if (!request || request.recipient_id !== interaction.user.id) throw new RangeError('That request is no longer available.');
     await interaction.deferUpdate();
@@ -384,12 +681,45 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     return interaction.editReply({ content: result.ok ? content : result.message, embeds: [], components: [] });
   }
 
-  async function handleGather(interaction) {
+  async function handleInvite(interaction) {
     await interaction.deferReply({ flags: PRIVATE });
     const interests = parseInterests(interaction.options.getString('interests', true), { max: 5 });
     if (!interests.length) throw new RangeError('Choose at least one interest.');
     const result = await gather.prepare({ guild: interaction.guild, senderId: interaction.user.id, interestSlugs: interests, message: interaction.options.getString('message', true) });
     if (!result.ok) return interaction.editReply(withNoMentions(result.message));
+    const draftId = `${Date.now().toString(36)}${(++invitationDraftSequence).toString(36)}`;
+    invitationDrafts.set(draftId, { ownerId: interaction.user.id, guildId: interaction.guildId, expiresAt: Date.now() + 10 * 60 * 1000, result });
+    return interaction.editReply(withNoMentions({
+      embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Preview your invite').setDescription(
+        `This will post to this channel and notify **${result.recipientIds.length}** opted-in member${result.recipientIds.length === 1 ? '' : 's'}. It does not send until you confirm.`
+      ).addFields(
+        { name: 'Interests', value: result.interestSlugs.map((slug) => store.getTag?.(interaction.guildId, slug)?.display_name || slug).join(' · '), inline: false },
+        { name: 'Message', value: safeDisplayText(interaction.options.getString('message', true), { maxLength: 500 }), inline: false },
+      )],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`invite:send:${interaction.user.id}:${draftId}`).setStyle(ButtonStyle.Success).setLabel('Send invite'),
+        new ButtonBuilder().setCustomId(`invite:cancel:${interaction.user.id}:${draftId}`).setStyle(ButtonStyle.Secondary).setLabel('Cancel'),
+      )],
+    }));
+  }
+
+  async function handleInviteComponent(interaction) {
+    const [, action, ownerId, draftId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('That invite belongs to someone else.');
+    const draft = invitationDrafts.get(draftId);
+    if (!draft || draft.expiresAt < Date.now()) {
+      invitationDrafts.delete(draftId);
+      throw new RangeError('That invite preview expired. Run `/invite` again.');
+    }
+    if (draft.guildId !== interaction.guildId || draft.ownerId !== interaction.user.id) throw new RangeError('That invite belongs to someone else.');
+    if (action === 'cancel') {
+      invitationDrafts.delete(draftId);
+      return interaction.update(withNoMentions({ content: 'Cancelled. Nothing was posted.', components: [], embeds: [] }));
+    }
+    if (action !== 'send') throw new RangeError('That invite action no longer exists.');
+    await interaction.deferUpdate();
+    invitationDrafts.delete(draftId);
+    const { result } = draft;
     result.commit();
     try {
       await interaction.channel.send(result.payload);
@@ -397,7 +727,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       result.rollback();
       throw error;
     }
-    return interaction.editReply(withNoMentions(`Sent the invitation to ${result.recipientIds.length} opted-in ${result.recipientIds.length === 1 ? 'member' : 'members'}.`));
+    return interaction.editReply(withNoMentions({ content: `Sent the invitation to ${result.recipientIds.length} opted-in ${result.recipientIds.length === 1 ? 'member' : 'members'}.`, components: [], embeds: [] }));
   }
 
   async function handleBoundaries(interaction) {
@@ -462,6 +792,127 @@ export function createInteractionHandler({ store, media, connections, gather, bo
     });
   }
 
+  function setupEmbed(settings, tags = []) {
+    const shownTags = tags.slice(0, 30).map((tag) => safeDisplayText(tag.display_name, { maxLength: 70 }));
+    const tagSummary = shownTags.length
+      ? `${shownTags.join(' · ')}${tags.length > shownTags.length ? ` · +${tags.length - shownTags.length} more` : ''}`
+      : 'None yet. Add a starter pack or your own names below.';
+    return new EmbedBuilder().setColor(0x786752).setTitle('Set up Bio')
+      .setDescription('Give people a clear, low-pressure way to make a card and find each other. These controls only affect this server.')
+      .addFields(
+        { name: 'Member-suggested interests', value: settings.allow_ugc_tags ? 'On' : 'Off', inline: true },
+        { name: 'Group invites', value: settings.allow_gathers ? 'On' : 'Off', inline: true },
+        { name: 'Interests per profile', value: String(settings.max_tags_per_user), inline: true },
+        { name: `Server interests · ${tags.length}`, value: safeDisplayText(tagSummary, { maxLength: 1024 }), inline: false },
+      );
+  }
+
+  function setupPayload(interaction, content = undefined) {
+    const settings = store.getGuildSettings(interaction.guildId);
+    const tags = store.listTags(interaction.guildId, 500);
+    return withNoMentions({
+      ...(content ? { content } : {}),
+      embeds: [setupEmbed(settings, tags)],
+      components: setupRows(interaction.user.id),
+    });
+  }
+
+  async function handleSetup(interaction) {
+    requireManageGuild(interaction);
+    return privateReply(interaction, setupPayload(interaction));
+  }
+
+  async function handleSetupComponent(interaction) {
+    const [, action, ownerId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('That setup panel belongs to someone else.');
+    requireManageGuild(interaction);
+    if (action === 'add' || action === 'remove') return interaction.showModal(setupInterestsModal(action, ownerId));
+    if (action === 'limit') {
+      return interaction.showModal(setupLimitModal(ownerId, store.getGuildSettings(interaction.guildId).max_tags_per_user));
+    }
+    if (action === 'pack') {
+      const pack = interaction.values?.[0];
+      const interests = STARTER_PACKS[pack];
+      if (!interests) throw new RangeError('Choose a valid starter pack.');
+      for (const displayName of interests) {
+        const slug = normalizeInterestSlug(displayName);
+        if (!store.getTag(interaction.guildId, slug)) store.addTag(interaction.guildId, slug, displayName, interaction.user.id, pack, { bypassUgc: true });
+      }
+      return interaction.update(setupPayload(interaction, `Added the ${pack} starter pack. Existing interests were left alone.`));
+    }
+    if (action === 'tags' || action === 'gathers') {
+      const key = action === 'tags' ? 'allow_ugc_tags' : 'allow_gathers';
+      const settings = store.getGuildSettings(interaction.guildId);
+      const updated = store.updateGuildSettings(interaction.guildId, { [key]: !settings[key] });
+      return interaction.update(setupPayload(interaction, `Saved: ${action === 'tags' ? 'member suggestions' : 'group invites'} are ${updated[key] ? 'on' : 'off'}.`));
+    }
+    if (action === 'post') {
+      await interaction.channel.send(withNoMentions({
+        embeds: [new EmbedBuilder().setColor(0x786752).setTitle('Make this server feel a little smaller')
+          .setDescription('Bio cards begin private. Make one when you want, then choose whether people can find you, say hello, or include you in small interest invites.')],
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('start:bio').setStyle(ButtonStyle.Primary).setLabel('Open Bio'),
+          new ButtonBuilder().setCustomId('start:find').setStyle(ButtonStyle.Secondary).setLabel('Find people'),
+        )],
+      }));
+      return interaction.update(setupPayload(interaction, 'Posted a start card in this channel.'));
+    }
+  }
+
+  function parseSetupNames(raw) {
+    const names = new Map();
+    for (const part of String(raw || '').split(',')) {
+      const displayName = safeDisplayText(part, { maxLength: 81 });
+      const slug = normalizeInterestSlug(displayName);
+      if (!slug) continue;
+      if (displayName.length > 80) throw new RangeError(`“${displayName.slice(0, 40)}…” is too long. Keep each interest under 80 characters.`);
+      if (!names.has(slug)) names.set(slug, displayName);
+    }
+    if (!names.size) throw new RangeError('Add at least one interest name.');
+    if (names.size > 25) throw new RangeError('Add or remove up to 25 interests at a time.');
+    return names;
+  }
+
+  async function handleSetupModal(interaction) {
+    const [, action, ownerId] = interaction.customId.split(':');
+    if (ownerId !== interaction.user.id) throw new RangeError('That setup editor belongs to someone else.');
+    requireManageGuild(interaction);
+    if (action === 'limit') {
+      const raw = interaction.fields.getTextInputValue('limit').trim();
+      if (!/^\d{1,2}$/.test(raw)) throw new RangeError('Use a whole number from 1 to 30.');
+      const limit = Number(raw);
+      if (limit < 1 || limit > 30) throw new RangeError('Use a whole number from 1 to 30.');
+      store.updateGuildSettings(interaction.guildId, { max_tags_per_user: limit });
+      return privateReply(interaction, setupPayload(interaction, `Profiles can now use up to ${limit} interests.`));
+    }
+    const names = parseSetupNames(interaction.fields.getTextInputValue('interests'));
+    if (action === 'add') {
+      const category = safeDisplayText(interaction.fields.getTextInputValue('category'), { maxLength: 32, fallback: 'general' });
+      store.transaction(() => {
+        for (const [slug, displayName] of names) {
+          store.addTag(interaction.guildId, slug, displayName, interaction.user.id, category, { bypassUgc: true });
+        }
+      });
+      return privateReply(interaction, setupPayload(interaction, `Added ${names.size} server interest${names.size === 1 ? '' : 's'}.`));
+    }
+    if (action === 'remove') {
+      let removed = 0;
+      store.transaction(() => {
+        for (const slug of names.keys()) if (store.removeTag(interaction.guildId, slug)) removed += 1;
+      });
+      return privateReply(interaction, setupPayload(interaction, removed ? `Removed ${removed} server interest${removed === 1 ? '' : 's'} and cleared them from member cards.` : 'None of those names were in the server interest list.'));
+    }
+    throw new RangeError('That setup editor is no longer available.');
+  }
+
+  async function handleStartCard(interaction) {
+    if (interaction.customId === 'start:bio') {
+      await interaction.deferReply({ flags: PRIVATE });
+      return showBioHome(interaction, { forcePrivate: true });
+    }
+    if (interaction.customId === 'start:find') return handleFind(interaction);
+  }
+
   async function handleHelp(interaction) {
     return privateReply(interaction, {
       embeds: [new EmbedBuilder()
@@ -469,18 +920,18 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         .setTitle('Bio')
         .setDescription('A member directory for finding shared interests and making contact by choice.')
         .addFields(
-          { name: 'Start', value: '`/profile edit` writes your card. It stays out of the directory until you turn directory visibility on.' },
-          { name: 'Find people', value: '`/discover people` searches quietly. Right-click a member and choose **View profile** for a direct look.' },
-          { name: 'Make contact', value: '`/connect request` sends a private request they can accept, decline, or block.' },
-          { name: 'Invite a group', value: '`/gather` mentions only members who opted into group calls for those interests.' },
-          { name: 'Interaction notes', value: '`/boundaries edit` records what helps conversations go well, with visibility you control.' },
+          { name: 'Start', value: '`/bio` opens your private home. Write a card, choose card art, then decide how it is shared.' },
+          { name: 'Find people', value: '`/find` quietly shows opted-in people and server interests. Right-click a member and choose **View Bio** for a direct look.' },
+          { name: 'Make contact', value: '`/connect member:@someone` sends a private request they can accept, decline, or block.' },
+          { name: 'Invite a group', value: '`/invite` shows a private preview before it notifies opted-in members.' },
+          { name: 'Interaction notes (optional)', value: 'The last control in `/bio` lets you share preferences only if that would help.' },
         )],
     });
   }
 
   return async function handleInteraction(interaction) {
     try {
-      if (interaction.isButton?.() && interaction.customId?.startsWith('conn:')) {
+      if ((interaction.isButton?.() || interaction.isUserSelectMenu?.()) && interaction.customId?.startsWith('conn:')) {
         return await handleConnectionComponent(interaction);
       }
       if (!interaction.inGuild?.()) {
@@ -489,8 +940,14 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       }
       store.ensureGuild(interaction.guildId);
       if (interaction.isAutocomplete?.()) return await handleAutocomplete(interaction);
-      if (interaction.isButton?.() || interaction.isStringSelectMenu?.()) {
+      if (interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isRoleSelectMenu?.() || interaction.isUserSelectMenu?.()) {
         if (interaction.customId.startsWith('bdry:')) return await boundaries.handleComponent(interaction);
+        if (interaction.customId.startsWith('bio:')) return await handleBioComponent(interaction);
+        if (interaction.customId.startsWith('style:')) return await handleStyleComponent(interaction);
+        if (interaction.customId.startsWith('share:')) return await handleSharingPreset(interaction);
+        if (interaction.customId.startsWith('invite:')) return await handleInviteComponent(interaction);
+        if (interaction.customId.startsWith('setup:')) return await handleSetupComponent(interaction);
+        if (interaction.customId.startsWith('start:')) return await handleStartCard(interaction);
         if (interaction.customId.startsWith('pref:')) return await handlePreference(interaction);
         if (interaction.customId.startsWith('profile-delete:')) return await handleDelete(interaction);
         return;
@@ -498,6 +955,7 @@ export function createInteractionHandler({ store, media, connections, gather, bo
       if (interaction.isModalSubmit?.()) {
         if (interaction.customId.startsWith('bdry:')) return await boundaries.handleModal(interaction);
         if (interaction.customId.startsWith('profile:')) return await handleProfileModal(interaction);
+        if (interaction.customId.startsWith('setup:')) return await handleSetupModal(interaction);
         if (interaction.customId.startsWith('connect:request:')) {
           const targetId = interaction.customId.split(':')[2];
           const target = await interaction.client.users.fetch(targetId);
@@ -506,21 +964,25 @@ export function createInteractionHandler({ store, media, connections, gather, bo
         return;
       }
       if (interaction.isUserContextMenuCommand?.()) {
-        if (interaction.commandName === 'View profile') return await showProfile(interaction, interaction.targetUser.id);
-        if (interaction.commandName === 'Connect') {
+        if (interaction.commandName === 'View Bio' || interaction.commandName === 'View profile') return await showProfile(interaction, interaction.targetUser.id);
+        if (interaction.commandName === 'Request connection' || interaction.commandName === 'Connect') {
           if (interaction.targetUser.id === interaction.user.id) throw new RangeError('Choose another member.');
           return await interaction.showModal(connectModal(interaction.targetUser.id));
         }
       }
       if (!interaction.isChatInputCommand?.()) return;
-      if (interaction.commandName === 'profile') return await handleProfile(interaction);
-      if (interaction.commandName === 'discover') return await handleDiscover(interaction);
+      if (interaction.commandName === 'bio') return await handleBio(interaction);
+      if (interaction.commandName === 'find') return await handleFind(interaction);
       if (interaction.commandName === 'connect') return await handleConnect(interaction);
-      if (interaction.commandName === 'gather') return await handleGather(interaction);
+      if (interaction.commandName === 'invite') return await handleInvite(interaction);
+      if (interaction.commandName === 'setup') return await handleSetup(interaction);
+      if (interaction.commandName === 'help') return await handleHelp(interaction);
+      if (interaction.commandName === 'profile') return await handleProfile(interaction);
+      if (interaction.commandName === 'discover') return await handleFind(interaction);
+      if (interaction.commandName === 'gather') return await handleInvite(interaction);
       if (interaction.commandName === 'boundaries') return await handleBoundaries(interaction);
       if (interaction.commandName === 'tags') return await handleTags(interaction);
       if (interaction.commandName === 'settings') return await handleSettings(interaction);
-      if (interaction.commandName === 'help') return await handleHelp(interaction);
     } catch (error) {
       logger.error('Interaction failed', { command: interaction.commandName || interaction.customId, error });
       try { await privateReply(interaction, friendlyError(error)); } catch (replyError) { logger.error('Could not report interaction failure', replyError); }

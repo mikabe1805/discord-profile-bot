@@ -32,15 +32,26 @@ process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
 try {
   await client.login(config.token);
-  if (process.argv.includes('--register-commands') && config.clientId && config.guildId) {
-    try {
-      const count = await registerCommands({ token: config.token, clientId: config.clientId, guildId: config.guildId });
-      console.log(`Registered ${count} guild commands.`);
-    } catch (error) {
-      console.error('Command registration failed; Bio will stay online with the previously registered commands.', error);
+  if (process.argv.includes('--register-commands') && config.clientId) {
+    const targets = [
+      ...(config.guildId ? [{ mode: 'guild', guildId: config.guildId }] : []),
+      { mode: 'global', guildId: null },
+    ];
+    for (const target of targets) {
+      try {
+        const count = await registerCommands({
+          token: config.token,
+          clientId: config.clientId,
+          guildId: target.guildId,
+          mode: target.mode,
+        });
+        console.log(`Registered ${count} ${target.mode} commands.`);
+      } catch (error) {
+        console.error(`${target.mode === 'guild' ? 'Guild' : 'Global'} command registration failed; Bio will stay online with the previously registered commands.`, error);
+      }
     }
   } else if (process.argv.includes('--register-commands')) {
-    console.warn('CLIENT_ID or GUILD_ID is missing; skipped command registration.');
+    console.warn('CLIENT_ID is missing; skipped command registration.');
   }
 } catch (error) {
   store.close();

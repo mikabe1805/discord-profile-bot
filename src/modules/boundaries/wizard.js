@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 
 const TTL = 20 * 60 * 1000;
 const SECTIONS = {
@@ -11,7 +11,12 @@ const FIELDS = Object.values(SECTIONS).flat().filter(k => !['notes', 'response_p
 const PRESETS = { open: Object.fromEntries(FIELDS.map(k => [k, 'comfortable'])), ask: Object.fromEntries(FIELDS.map(k => [k, 'ask_first'])), lowkey: Object.fromEntries(FIELDS.map(k => [k, 'not_comfortable'])) };
 const clone = value => JSON.parse(JSON.stringify(value || {}));
 const id = i => `${i.guildId}:${i.user.id}`;
-const values = [{ label: 'Comfortable', value: 'comfortable', emoji: '🙂' }, { label: 'Ask first', value: 'ask_first', emoji: '💬' }, { label: 'Not comfortable', value: 'not_comfortable', emoji: '⛔' }];
+const values = [{ label: 'Comfortable', value: 'comfortable', emoji: '🙂' }, { label: 'Ask first', value: 'ask_first', emoji: '💬' }, { label: 'Not comfortable', value: 'not_comfortable', emoji: '⛔' }, { label: 'No preference shared', value: 'clear', emoji: '➖' }];
+const PRIVACY_OPTIONS = [
+  { label: 'Private', value: 'private', description: 'Only you can view these notes.' },
+  { label: 'Server members', value: 'members', description: 'Anyone in this server can view them.' },
+  { label: 'Selected server role', value: 'role', description: 'Only members with one role can view them.' }
+];
 
 function normalize(data) {
   const source = clone(data); const out = {};
@@ -24,6 +29,16 @@ function normalize(data) {
 function oldValue(value) { return value === 'yes' ? 'comfortable' : value === 'ask' ? 'ask_first' : value === 'no' ? 'not_comfortable' : value; }
 function sectionFor(field) { return Object.entries(SECTIONS).find(([, fields]) => fields.includes(field))?.[0] || 'other'; }
 async function reply(i, content) { return (i.replied || i.deferred) ? i.followUp({ content, flags: 64 }) : i.reply({ content, flags: 64 }); }
+function privacyFrom(saved) {
+  const level = ['private', 'members', 'role'].includes(saved?.privacy_level) ? saved.privacy_level : 'private';
+  const roleId = level === 'role' ? saved?.privacy_role_id || null : null;
+  return { level, roleId };
+}
+function privacyLabel(privacy) {
+  if (privacy.level === 'members') return 'Server members';
+  if (privacy.level === 'role') return privacy.roleId ? 'Selected server role' : 'Choose a server role';
+  return 'Private';
+}
 
 export function createBoundariesController({ store, now = () => Date.now() }) {
   const drafts = new Map();
@@ -32,33 +47,80 @@ export function createBoundariesController({ store, now = () => Date.now() }) {
     if (!draft || now() - draft.startedAt > TTL) { drafts.delete(id(interaction)); return null; }
     return draft;
   };
-  const controls = owner => new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`bdry:save:${owner}`).setStyle(ButtonStyle.Success).setLabel('Save'), new ButtonBuilder().setCustomId(`bdry:cancel:${owner}`).setStyle(ButtonStyle.Secondary).setLabel('Cancel'));
-  const hub = owner => [
-    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('bdry:preset').setPlaceholder('Optional starting point').addOptions([{ label: 'Open', value: 'open' }, { label: 'Ask first', value: 'ask' }, { label: 'Low-key', value: 'lowkey' }])),
-    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('bdry:section').setPlaceholder('Choose a section').addOptions(Object.keys(SECTIONS).map(value => ({ label: LABEL[value], value })))),
-    controls(owner)
-  ];
+  const controls = (owner, hasSaved = false) => {
+    const buttons = [
+      new ButtonBuilder().setCustomId(`bdry:save:${owner}`).setStyle(ButtonStyle.Success).setLabel('Save'),
+      new ButtonBuilder().setCustomId(`bdry:cancel:${owner}`).setStyle(ButtonStyle.Secondary).setLabel('Cancel'),
+    ];
+    if (hasSaved) buttons.push(new ButtonBuilder().setCustomId(`bdry:remove:${owner}`).setStyle(ButtonStyle.Danger).setLabel('Remove saved notes'));
+    return new ActionRowBuilder().addComponents(buttons);
+  };
+  const hub = (owner, privacy, hasSaved = false) => {
+    const rows = [
+      new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`bdry:preset:${owner}`).setPlaceholder('Optional starting point').addOptions([{ label: 'Open', value: 'open' }, { label: 'Ask first', value: 'ask' }, { label: 'Low-key', value: 'lowkey' }])),
+      new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`bdry:section:${owner}`).setPlaceholder('Choose a section').addOptions(Object.keys(SECTIONS).map(value => ({ label: LABEL[value], value })))),
+      new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`bdry:privacy:${owner}`).setPlaceholder(`Who can view: ${privacyLabel(privacy)}`).addOptions(PRIVACY_OPTIONS.map(option => ({ ...option, default: option.value === privacy.level }))))
+    ];
+    if (privacy.level === 'role') {
+      const picker = new RoleSelectMenuBuilder().setCustomId(`bdry:privacy-role:${owner}`).setPlaceholder('Choose the server role that can view these notes').setMinValues(1).setMaxValues(1);
+      if (privacy.roleId) picker.setDefaultRoles(privacy.roleId);
+      rows.push(new ActionRowBuilder().addComponents(picker));
+    }
+    rows.push(controls(owner, hasSaved));
+    return rows;
+  };
   async function startEdit(interaction, { preset } = {}) {
     const saved = await store.getBoundaries(interaction.guildId, interaction.user.id);
     const draft = {
       ownerId: interaction.user.id,
+      guildId: interaction.guildId,
       startedAt: now(),
       data: preset ? clone(PRESETS[preset] || {}) : normalize(saved?.data || saved || {}),
-      privacy: saved ? { level: saved.privacy_level, roleId: saved.privacy_role_id } : undefined,
+      privacy: privacyFrom(saved),
+      hasSaved: Boolean(saved),
     };
     drafts.set(id(interaction), draft);
-    await interaction.reply({ content: 'Your interaction notes stay private until you press Save. Choose only what helps people treat you well; blanks are okay.', components: hub(draft.ownerId), flags: 64 });
+    await interaction.reply({ content: `Interaction notes are optional. Current visibility: ${privacyLabel(draft.privacy)}. Choose only what helps people treat you well; blanks are okay.`, components: hub(draft.ownerId, draft.privacy, draft.hasSaved), flags: 64 });
   }
   async function handleComponent(interaction) {
     const draft = current(interaction);
     const [, action, ownerId, field] = interaction.customId.split(':');
-    if (!draft) return reply(interaction, 'This editing session expired. Run `/boundaries edit` to start again.');
+    if (!draft) return reply(interaction, 'This editing session expired. Open `/bio` and choose **Interaction notes (optional)** to start again.');
     if (ownerId && ownerId !== interaction.user.id) return reply(interaction, 'That control belongs to someone else’s draft.');
-    if (action === 'preset') { draft.data = clone(PRESETS[interaction.values?.[0]] || {}); return interaction.update({ content: 'Preset added to your unsaved draft. You can change anything below.', components: hub(draft.ownerId) }); }
+    if (draft.guildId !== interaction.guildId) return reply(interaction, 'That control belongs to a different server.');
+    if (action === 'preset') { draft.data = { ...draft.data, ...clone(PRESETS[interaction.values?.[0]] || {}) }; return interaction.update({ content: 'Preset added to your unsaved draft. You can change anything below.', components: hub(draft.ownerId, draft.privacy, draft.hasSaved) }); }
     if (action === 'section') return showSection(interaction, draft, interaction.values?.[0]);
-    if (action === 'value') { draft.data[field] = interaction.values?.[0]; return showSection(interaction, draft, sectionFor(field)); }
+    if (action === 'value') {
+      const selected = interaction.values?.[0];
+      if (selected === 'clear') delete draft.data[field];
+      else draft.data[field] = selected;
+      return showSection(interaction, draft, sectionFor(field));
+    }
     if (action === 'notes') return notes(interaction, draft);
-    if (action === 'save') { await store.saveBoundaries(interaction.guildId, interaction.user.id, clone(draft.data), draft.privacy); drafts.delete(id(interaction)); return interaction.update({ content: 'Saved. Thanks for making the kind of interaction you want clearer.', components: [], embeds: [] }); }
+    if (action === 'privacy') {
+      const level = interaction.values?.[0];
+      if (!['private', 'members', 'role'].includes(level)) return reply(interaction, 'Choose a valid visibility option.');
+      draft.privacy = { level, roleId: level === 'role' && draft.privacy.level === 'role' ? draft.privacy.roleId : null };
+      const rolePrompt = level === 'role' && !draft.privacy.roleId ? ' Choose the server role before saving.' : '';
+      return interaction.update({ content: `Visibility: ${privacyLabel(draft.privacy)}.${rolePrompt}`, components: hub(draft.ownerId, draft.privacy, draft.hasSaved) });
+    }
+    if (action === 'privacy-role') {
+      const roleId = interaction.values?.[0];
+      if (!roleId) return reply(interaction, 'Choose a server role before saving.');
+      draft.privacy = { level: 'role', roleId };
+      return interaction.update({ content: 'Visibility: selected server role.', components: hub(draft.ownerId, draft.privacy, draft.hasSaved) });
+    }
+    if (action === 'save') {
+      if (draft.privacy.level === 'role' && !draft.privacy.roleId) return reply(interaction, 'Choose a server role before saving role-only visibility.');
+      await store.saveBoundaries(interaction.guildId, interaction.user.id, clone(draft.data), draft.privacy);
+      drafts.delete(id(interaction));
+      return interaction.update({ content: 'Saved. Thanks for making the kind of interaction you want clearer.', components: [], embeds: [] });
+    }
+    if (action === 'remove') {
+      const removed = store.deleteBoundaries(interaction.guildId, interaction.user.id);
+      drafts.delete(id(interaction));
+      return interaction.update({ content: removed ? 'Removed your saved interaction notes.' : 'You did not have saved interaction notes.', components: [], embeds: [] });
+    }
     if (action === 'cancel') { drafts.delete(id(interaction)); return interaction.update({ content: 'Discarded your unsaved changes.', components: [], embeds: [] }); }
   }
   async function handleModal(interaction) {
@@ -70,7 +132,7 @@ export function createBoundariesController({ store, now = () => Date.now() }) {
   async function showSection(interaction, draft, section) {
     const rows = (SECTIONS[section] || []).filter(k => k !== 'notes').map(field => new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`bdry:value:${draft.ownerId}:${field}`).setPlaceholder(LABEL[field]).addOptions(values)));
     rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`bdry:notes:${draft.ownerId}`).setStyle(ButtonStyle.Secondary).setLabel('Add a note')));
-    rows.push(controls(draft.ownerId));
+    rows.push(controls(draft.ownerId, draft.hasSaved));
     await interaction.update({ content: `${LABEL[section] || 'Notes'} — blanks mean no preference was shared.`, components: rows, embeds: [] });
   }
   async function notes(interaction, draft) {
