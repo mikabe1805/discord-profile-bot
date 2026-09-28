@@ -54,6 +54,37 @@ function statusEmbed({ status, recipient }) {
     .setDescription(accepted ? `${name} accepted your request. You can reach out when it feels right.` : `${name} declined your request.`);
 }
 
+function sharedInterestNames(store, guildId, senderId, recipientId) {
+  if (typeof store.listUserTags !== 'function') return [];
+  const senderTags = store.listUserTags(guildId, senderId) || [];
+  const recipientSlugs = new Set((store.listUserTags(guildId, recipientId) || []).map((tag) => tag.tag_slug));
+  return [...new Map(senderTags
+    .filter((tag) => recipientSlugs.has(tag.tag_slug))
+    .map((tag) => [tag.tag_slug, safeDisplayText(tag.display_name || tag.tag_slug, { maxLength: 80 })]))
+    .values()].slice(0, 3);
+}
+
+function handoffText({ sharedInterests, otherProfile, otherName }) {
+  const details = [];
+  if (sharedInterests.length) {
+    details.push(`You both listed ${sharedInterests.map((interest) => `**${interest}**`).join(' · ')}.`);
+  }
+  const openTo = safeDisplayText(otherProfile?.open_to || '', { maxLength: 200, fallback: '' });
+  if (openTo) details.push(`${otherName} said they’re open to: ${openTo}`);
+  if (sharedInterests.length) return `${details.join('\n')}\n\nAn easy first message: ask what they have been enjoying about ${sharedInterests[0]} lately.`;
+  if (openTo) return `${details.join('\n')}\n\nAn easy first message: ask what they have been doing with that lately.`;
+  return 'You both chose to connect. Say hello in your own words when you are ready.';
+}
+
+function acceptedEmbed({ recipient, intro }) {
+  const name = safeDisplayText(recipient?.globalName || recipient?.username || 'They', { maxLength: 80 });
+  return new EmbedBuilder()
+    .setColor(0x6f8060)
+    .setTitle('Connection accepted')
+    .setDescription(`${name} accepted your request.\n\n${intro}`)
+    .setFooter({ text: 'Nothing was posted publicly.' });
+}
+
 /**
  * Coordinates private, opt-in connection requests. The service deliberately returns
  * user-safe result objects so the interaction layer can choose the wording and visibility.
@@ -151,8 +182,26 @@ export function createConnectionService({ store, client, now = () => new Date() 
       return failure('could_not_respond', 'That response could not be saved.');
     }
 
-    await dmUser(updated.sender_id, { embeds: [statusEmbed({ status, recipient: { username: 'They' } })] });
-    return { ok: true, code: status, request: updated };
+    if (status !== 'accepted') {
+      await dmUser(updated.sender_id, { embeds: [statusEmbed({ status, recipient: { username: 'They' } })] });
+      return { ok: true, code: status, request: updated };
+    }
+
+    // Both people have now explicitly agreed. Only then surface profile details they each chose
+    // for this server, as a gentle first-conversation cue in their private responses.
+    const senderProfile = store.getProfile(updated.guild_id, updated.sender_id);
+    const recipientProfile = store.getProfile(updated.guild_id, updated.recipient_id);
+    const sharedInterests = sharedInterestNames(store, updated.guild_id, updated.sender_id, updated.recipient_id);
+    const recipient = client.users?.cache?.get(updated.recipient_id)
+      || await client.users?.fetch(updated.recipient_id).catch(() => null);
+    const sender = client.users?.cache?.get(updated.sender_id)
+      || await client.users?.fetch(updated.sender_id).catch(() => null);
+    const senderName = safeDisplayText(sender?.globalName || sender?.username || 'They', { maxLength: 80 });
+    const recipientName = safeDisplayText(recipient?.globalName || recipient?.username || 'They', { maxLength: 80 });
+    const senderIntro = handoffText({ sharedInterests, otherProfile: recipientProfile, otherName: recipientName });
+    const intro = handoffText({ sharedInterests, otherProfile: senderProfile, otherName: senderName });
+    await dmUser(updated.sender_id, { embeds: [acceptedEmbed({ recipient, intro: senderIntro })] });
+    return { ok: true, code: status, request: updated, intro };
   }
 
   async function blockRequest({ requestId, actorId }) {

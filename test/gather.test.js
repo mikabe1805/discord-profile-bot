@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createGatherService } from '../src/gather.js';
+import { buildGatherRsvpPayload, createGatherRsvpService, createGatherService } from '../src/gather.js';
 
 const NOW = new Date('2026-09-14T16:00:00.000Z');
 
@@ -104,4 +104,74 @@ test('enforces server setting, profile requirement, and the durable cooldown', a
   assert.equal(prepared.code, 'cooldown');
   assert.equal(prepared.retryAfterMs, 15 * 60 * 1000);
   assert.equal(store.calls.record, 0);
+});
+
+function makeRsvpStore() {
+  const plans = new Map();
+  const rsvps = new Map();
+  let nextPlanId = 1;
+  return {
+    async createGatherPlan(input) {
+      const plan = { id: nextPlanId++, status: 'pending', ...input, sender_id: input.senderId, recipient_ids: input.recipientIds, interest_slugs: input.interestSlugs };
+      plans.set(plan.id, plan);
+      return plan;
+    },
+    async getGatherPlan(id) { return plans.get(Number(id)) || null; },
+    async recordGatherRsvp(planId, userId, response) {
+      rsvps.set(`${planId}:${userId}`, { plan_id: Number(planId), user_id: userId, response });
+    },
+    async listGatherRsvps(planId) {
+      return [...rsvps.values()].filter((rsvp) => rsvp.plan_id === Number(planId));
+    },
+    async setGatherConversation(planId, { threadId }) {
+      const plan = plans.get(Number(planId));
+      plan.thread_id = threadId;
+      plan.status = 'open';
+      return plan;
+    },
+  };
+}
+
+test('RSVP plans are durable-store backed and lead the host to a real shared room', async () => {
+  const service = createGatherRsvpService({ store: makeRsvpStore(), now: () => NOW });
+  const created = await service.create({
+    guildId: 'guild', senderId: 'sender', recipientIds: ['one', 'two'], interestSlugs: ['board-games'],
+    activity: 'Try a co-op game', startsAt: 'Friday at 8', channelId: 'channel', messageId: 'message',
+  });
+
+  assert.match(created.payload.content, /Try a co-op game · when: Friday at 8/);
+  assert.deepEqual(created.payload.components[0].components.map((button) => button.custom_id), [
+    'gather:rsvp:1:yes', 'gather:rsvp:1:maybe', 'gather:rsvp:1:no',
+  ]);
+  const response = await service.respond({ planId: 1, userId: 'one', response: 'yes' });
+  assert.equal(response.ok, true);
+  assert.match(response.payload.content, /1 in/);
+  assert.equal(response.payload.components[0].components.at(-1).custom_id, 'gather:start:1');
+
+  const ready = await service.readyToStart({ planId: 1, userId: 'sender' });
+  assert.deepEqual(ready.participantIds, ['sender', 'one']);
+  const opened = await service.markConversationOpen({ planId: 1, threadId: 'thread' });
+  assert.match(opened.payload.content, /private conversation is open/);
+  assert.equal(opened.payload.components[0].components[0].disabled, true);
+});
+
+test('RSVPs are limited to people invited to the pending plan', async () => {
+  const service = createGatherRsvpService({ store: makeRsvpStore(), now: () => NOW });
+  await service.create({
+    guildId: 'guild', senderId: 'sender', recipientIds: ['one'], interestSlugs: ['games'], channelId: 'channel', messageId: 'message',
+  });
+  const outsider = await service.respond({ planId: 1, userId: 'outside', response: 'yes' });
+  assert.deepEqual(outsider, {
+    ok: false,
+    code: 'not_invited',
+    message: 'This RSVP is for the people invited to this gathering.',
+  });
+  const nonHost = await service.readyToStart({ planId: 1, userId: 'one' });
+  assert.equal(nonHost.code, 'host_required');
+});
+
+test('gather RSVP payload never permits mass mentions', () => {
+  const payload = buildGatherRsvpPayload({ id: 9, activity: '@everyone game', interest_slugs: ['tabletop-games'] });
+  assert.equal(payload.allowedMentions.parse.length, 0);
+  assert.match(payload.content, /@\u200beveryone/);
 });

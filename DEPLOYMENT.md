@@ -19,6 +19,22 @@ The repository's `.railway/railway.ts` preserves the production variables, decla
 
 Enable **Server Members Intent** for Bio in the Discord Developer Portal. The bot uses it to discard a member's saved data when they leave the server; the current application is enabled for the limited, unverified-app form of that intent.
 
+## Discord install and channel permissions
+
+Reinstall Bio with the current OAuth link after deploying this release:
+
+```text
+https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=360777370640&scope=bot%20applications.commands
+```
+
+That permission set includes the existing card permissions plus **Manage Channels**, **Read Message History**, **Create Private Threads**, **Send Messages in Threads**, and **Manage Threads**. They support the optional features below. If the server uses a more restricted bot role, grant these permissions only in the channels where Bio is expected to work:
+
+- **Public Bio channel:** View Channel, Send Messages, Embed Links, Attach Files, and Read Message History. Bio needs to fetch, edit, and remove its one managed card per opted-in member.
+- **Create Bio channel:** Manage Channels. Without it, an administrator can run `/setup` in an existing regular text channel and choose **Use this channel** instead.
+- **RSVP invitation channel:** Create Private Threads, Send Messages in Threads, and Manage Threads. These are needed when a host turns accepted RSVPs into a private conversation.
+
+`/setup` itself is limited to members with Discord’s **Manage Server** permission. The bot never publishes existing profiles simply because a moderator enables a Bio channel. Each member must separately choose **Publish & open to hellos**, **Publish & open to groups**, or enable **Show in Bio channel** after becoming discoverable. Turning off the Bio channel removes its managed cards and clears those publishing choices, so re-enabling it always requires a fresh member decision.
+
 ## First deploy and migration
 
 1. In Railway, open the existing Bio service and verify the project/environment/service are the intended ones.
@@ -45,6 +61,12 @@ First use Railway's dashboard deployment history to restore the last known-good 
 
 ## Logs and smoke checks
 
-Look for: process start, migration completion, both guild and global command registration, Discord `ready`, and the absence of repeated reconnect or database errors. In Discord, check `/help`, run `/bio`, complete the first-run flow, confirm the card stays out of discovery until a sharing preset is chosen, upload a photo from the primary **Upload your own photo** button, choose a vibe and title, and verify each remains when another is changed. Open **Preselected photos** and try one fallback photo, then test the optional `/bio picture` shortcut. Run `/view` with no options and confirm your card is posted publicly without interaction notes or sharing-status details, then run `/view visible:false` and confirm only you can see it. From a second account, verify `/view member:@someone` works for an opted-in member and privately refuses a member who is not listed. Search with `/find`, use **View Bio**, send one `/connect` request or use **Request connection**, and verify the recipient can accept or decline it. With a small test group, preview and send one `/invite` using opted-in members, then confirm the notification and mention behavior. Confirm `/setup` is unavailable to a member without server-management permission. As an administrator, open **Review starter tags**, confirm every tag is visible before selection, select and unselect a subset, cancel once and verify the server pool is unchanged, then add a subset and post the start card.
+Look for: process start, migration completion, both guild and global command registration, Discord `ready`, and the absence of repeated reconnect or database errors. In Discord, check `/help`, run `/bio`, complete **Start with one line**, and confirm the card stays out of discovery and the Bio channel until a sharing choice is made. Upload a photo from the primary **Upload your own photo** button, choose a vibe and title, and verify each remains when another is changed. Open **Preselected photos** and try one fallback photo, then test the optional `/bio picture` shortcut.
+
+As an administrator, run `/setup` and test both channel choices: create `#member-bios` in a disposable test server, then disable it and confirm that its Bio cards disappear, publishing choices clear, and the channel remains. In the production-shaped server, use **Use this channel** only in a regular text channel. From a second account, choose a publish sharing preset and verify that exactly one public card appears, its update edits the same message, and changing to private removes it. Confirm that an older discoverable profile remains absent until the owner selects **Show in Bio channel**. Verify public cards omit interaction notes and sharing-status details. Use **Post Bio prompt** to send one question and verify its two buttons open the Bio update flow and directory search in the configured Bio channel.
+
+Run `/view` with no options and confirm your card is posted publicly without interaction notes or sharing-status details, then run `/view visible:false` and confirm only you can see it. From a second account, verify `/view member:@someone` works for an opted-in member and privately refuses a member who is not listed. Search with `/find`, use **View Bio**, send one `/connect` request or use **Request connection**, and verify the recipient can accept or decline it and receives the shared-interest handoff only after accepting.
+
+With a small test group, preview and send one `/invite` using opted-in members. Verify that only invitees can RSVP, the count updates, and the host can open a private conversation after at least one **I’m in**. Check that only the host and people who chose **I’m in** are added, and that the invitation controls close after the conversation opens. Confirm `/setup` is unavailable to a member without server-management permission. As an administrator, open **Review starter tags**, confirm every tag is visible before selection, select and unselect a subset, cancel once and verify the server pool is unchanged, then add a subset and post the start card.
 
 Discord account, DM delivery, permission, and notification behavior still need an owner-operated smoke test in the actual server. CI and Railway logs cannot certify those interactions.

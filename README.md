@@ -8,18 +8,33 @@ The public surface is intentionally small:
 - `/view [member] [visible]` shows a Bio card. With no options, it posts your own card in the channel. Choose an opted-in member to show their card, or set `visible:false` to keep the result private.
 - `/find [interest]` quietly finds opted-in members and server interests. It does not notify the people returned.
 - `/connect [member] [message]` sends a private connection request, or opens your request list when no member is supplied. The recipient can accept, decline, or block it.
-- `/invite <interests> <message>` previews a capped, opt-in group invitation before it notifies matching members.
-- `/setup` is admin-only and opens the server setup panel. Its starter tags are reviewable suggestions: moderators see every tag in a group, select only the useful ones, and add them with an explicit confirmation.
+- `/invite <interests> <message> [activity] [when]` previews a capped, opt-in group invitation before it notifies matching members. Invitees can RSVP in the channel; the host can open a private conversation for the people who chose **I’m in**.
+- `/setup` is admin-only and opens the server setup panel. It can create or select a public Bio channel, configure the directory and group invites, and review starter tags before adding them.
 - `/help` explains the flow in Discord.
 - The member context menu provides **View Bio** and **Request connection**.
 
 If a member does not have an aesthetic photo ready, **Preselected photos** opens six original photographs supplied by the bot owner: **Canopy**, **Still Water**, **Shoreline**, **Lantern Sky**, **Olive Dusk**, and **Hillside Weather**. They are backups and stay separate from the member's chosen vibe and title. Their source mapping is recorded in [`src/assets/profile-presets/SOURCES.md`](src/assets/profile-presets/SOURCES.md); Bio does not bundle generated or stock artwork.
 
-Bio starts private. On first run, choose a reason to begin or choose “Just make my card,” write your card, add your photo, vibe, and title, and then choose a sharing preset: **Private for now**, **Open to hellos** (directory visibility and private requests), or **Open to groups** (also eligible for matching `/invite` messages). Interaction notes are optional and intentionally last in the Bio flow; they can be left blank and have their own visibility choice.
+Bio starts private. The first screen offers **Start with one line**, a required answer to “What could someone talk to you about?” Members can add a short bio, interests, photo, vibe, and title later. **Open full editor** remains available for people who want to write everything now. Interaction notes are optional and intentionally last in the Bio flow; they can be left blank and have their own visibility choice.
 
-For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=52224&scope=bot%20applications.commands). A server administrator can then run `/setup` to review starter tag suggestions, add custom interests, configure limits, member suggestions and group invites, and post the start card in a channel.
+## Public Bio channel
 
-Profiles stay out of discovery until the member opts into directory visibility. A member can intentionally post their own card with `/view` without changing that setting; other members' cards can only be viewed after they opt in. Public cards omit interaction notes and sharing-status details. Search, previews, and ordinary replies suppress mentions. The bot stores its SQLite database and uploaded profile images under `DATA_DIR`; no image-hosting account is required.
+Run `/setup` in the channel where you want the welcome card, then choose **Create Bio channel** to make `#member-bios`, or **Use this channel** to use the current regular text channel. Bio posts a small welcome card there so people have a visible way back into the flow.
+
+A member’s card only appears after they choose **Publish & open to hellos** or **Publish & open to groups**, or turn on **Show in Bio channel** in **Sharing**. This also requires directory visibility, so members always make an explicit decision before a public card exists. Existing directory profiles do not get published just because an administrator enables the channel.
+
+Bio keeps one card per opted-in member. Changing their Bio, photo, vibe, title, or sharing choice updates that same message. Turning off **Show in Bio channel**, choosing **Private for now**, deleting the profile, or leaving the server removes the card. **Turn off Bio channel** removes Bio’s public cards, clears their publishing choices, and leaves the Discord channel itself for the server to keep or repurpose. If a moderator enables a Bio channel again, members choose to publish again.
+
+For a quick start, install [Bio to Discord](https://discord.com/oauth2/authorize?client_id=1416081968537538640&permissions=360777370640&scope=bot%20applications.commands). A server administrator can then run `/setup` to review starter tag suggestions, add custom interests, configure limits, member suggestions and group invites, post the start card, and enable the Bio channel.
+
+Profiles stay out of discovery until the member opts into directory visibility. A member can intentionally post their own card with `/view` without changing that setting; other members' cards can only be viewed after they opt in. Public Bio-channel cards omit interaction notes and sharing-status details. Search, previews, and ordinary replies suppress mentions. The bot stores its SQLite database and uploaded profile images under `DATA_DIR`; no image-hosting account is required.
+
+## Server owner checklist
+
+1. Run `/setup`, choose only the interests that fit the server, and post the welcome card where new members will see it.
+2. Enable a Bio channel only if a visible, member-controlled directory fits the community. Keep its topic and permissions clear: it is for bot-managed Bio cards, not discussion.
+3. Give the bot **View Channel**, **Send Messages**, **Embed Links**, **Attach Files**, and **Read Message History** in channels where it posts or updates cards. **Create Bio channel** additionally needs **Manage Channels**. RSVP conversations need **Create Private Threads**, **Send Messages in Threads**, and **Manage Threads** in the invite channel.
+4. When there is a real reason to meet people, choose **Post Bio prompt** in `/setup`. Write one question, and Bio posts it to the configured Bio channel with **Make or update my Bio** and **Find people** buttons. Members can update their cards at any time from that prompt, the welcome card, or `/bio`.
 
 ## Local development
 

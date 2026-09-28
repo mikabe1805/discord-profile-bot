@@ -3,14 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const DEFAULT_GUILD = Object.freeze({
-  allow_ugc_tags: true, max_tags_per_user: 30, profile_theme: 'default', custom_colors: null, allow_gathers: true,
+  allow_ugc_tags: true, max_tags_per_user: 30, profile_theme: 'default', custom_colors: null, allow_gathers: true, bio_board_channel_id: null,
 });
-const PROFILE_FIELDS = new Set(['bio', 'profile_image', 'pronouns', 'open_to', 'discoverable', 'allow_requests', 'allow_group_pings']);
-const GUILD_FIELDS = new Set(['allow_ugc_tags', 'max_tags_per_user', 'profile_theme', 'custom_colors', 'allow_gathers']);
+const PROFILE_FIELDS = new Set(['bio', 'profile_image', 'pronouns', 'open_to', 'discoverable', 'allow_requests', 'allow_group_pings', 'publish_to_board']);
+const GUILD_FIELDS = new Set(['allow_ugc_tags', 'max_tags_per_user', 'profile_theme', 'custom_colors', 'allow_gathers', 'bio_board_channel_id']);
 const THEME_FIELDS = new Set(['theme', 'primary_color', 'secondary_color', 'title', 'tags_emoji']);
 const REQUEST_STATUSES = new Set(['pending', 'accepted', 'declined', 'cancelled']);
 const PRIVACY_LEVELS = new Set(['members', 'role', 'private']);
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 11;
 
 function requiredId(value, name) {
   if (typeof value !== 'string' || !/^[0-9A-Za-z:_-]{1,128}$/.test(value)) throw new TypeError(`Invalid ${name}`);
@@ -32,6 +32,21 @@ function tagSlug(value) {
 function rowBool(row, keys) {
   for (const key of keys) if (row[key] !== undefined) row[key] = Boolean(row[key]);
   return row;
+}
+function jsonArray(value, name, { maxItems = 100, item = (entry) => entry } = {}) {
+  if (!Array.isArray(value) || value.length > maxItems) throw new TypeError(`Invalid ${name}`);
+  return value.map(item);
+}
+function readJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function optionalDate(value, name) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new TypeError(`Invalid ${name}`);
+  return new Date(value).toISOString();
 }
 function columnExists(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((entry) => entry.name === column);
@@ -134,6 +149,69 @@ export function createStore({ databasePath, backupDir = null } = {}) {
       CREATE INDEX IF NOT EXISTS idx_gathers_sender_created
         ON gather_events(guild_id, sender_id, created_at DESC);
     `));
+    apply(7, () => {
+      if (!columnExists(db, 'guilds', 'bio_board_channel_id')) {
+        db.exec('ALTER TABLE guilds ADD COLUMN bio_board_channel_id TEXT');
+      }
+    });
+    apply(8, () => db.exec(`
+      CREATE TABLE IF NOT EXISTS bio_board_messages (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (guild_id, user_id),
+        FOREIGN KEY (guild_id, user_id) REFERENCES profiles(guild_id, user_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_bio_board_messages_channel
+        ON bio_board_messages(guild_id, channel_id, user_id);
+    `));
+    apply(9, () => db.exec(`
+      CREATE TABLE IF NOT EXISTS gather_plans (
+        id INTEGER PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        activity TEXT,
+        starts_at TEXT,
+        interest_slugs TEXT NOT NULL,
+        recipient_ids TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','open','expired')),
+        thread_id TEXT,
+        expires_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, message_id),
+        FOREIGN KEY (guild_id) REFERENCES guilds(guild_id)
+      );
+      CREATE TABLE IF NOT EXISTS gather_rsvps (
+        plan_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        response TEXT NOT NULL CHECK(response IN ('yes','maybe','no')),
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (plan_id, user_id),
+        FOREIGN KEY (plan_id) REFERENCES gather_plans(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_gather_plans_guild_status
+        ON gather_plans(guild_id, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_gather_rsvps_plan_response
+        ON gather_rsvps(plan_id, response, user_id);
+    `));
+    apply(10, () => {
+      if (!columnExists(db, 'profiles', 'publish_to_board')) {
+        db.exec('ALTER TABLE profiles ADD COLUMN publish_to_board INTEGER NOT NULL DEFAULT 0');
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_profiles_board ON profiles(guild_id, discoverable, publish_to_board, user_id)');
+    });
+    apply(11, () => {
+      if (!columnExists(db, 'gather_plans', 'invitation')) {
+        db.exec('ALTER TABLE gather_plans ADD COLUMN invitation TEXT');
+      }
+    });
   });
   migrate();
 
@@ -144,7 +222,7 @@ export function createStore({ databasePath, backupDir = null } = {}) {
   };
   const getGuildSettings = (guildId) => {
     requiredId(guildId, 'guild id');
-    const row = db.prepare('SELECT allow_ugc_tags,max_tags_per_user,profile_theme,custom_colors,allow_gathers FROM guilds WHERE guild_id=?').get(guildId);
+    const row = db.prepare('SELECT allow_ugc_tags,max_tags_per_user,profile_theme,custom_colors,allow_gathers,bio_board_channel_id FROM guilds WHERE guild_id=?').get(guildId);
     if (!row) return { ...DEFAULT_GUILD };
     let customColors = null;
     try { customColors = row.custom_colors ? JSON.parse(row.custom_colors) : null; } catch { customColors = null; }
@@ -159,6 +237,7 @@ export function createStore({ databasePath, backupDir = null } = {}) {
       if (key === 'max_tags_per_user' && (!Number.isInteger(value) || value < 1 || value > 100)) throw new TypeError('Invalid max_tags_per_user');
       if (key === 'profile_theme') return optionalText(value, key, 64);
       if (key === 'custom_colors') return value == null ? null : JSON.stringify(value);
+      if (key === 'bio_board_channel_id') return value == null ? null : requiredId(value, key);
       return value;
     });
     db.prepare(`UPDATE guilds SET ${entries.map(([key]) => `${key}=?`).join(',')},updated_at=CURRENT_TIMESTAMP WHERE guild_id=?`).run(...values, guildId);
@@ -166,8 +245,8 @@ export function createStore({ databasePath, backupDir = null } = {}) {
   };
   const getProfile = (guildId, userId) => {
     requiredId(guildId, 'guild id'); requiredId(userId, 'user id');
-    const row = db.prepare('SELECT guild_id,user_id,bio,profile_image,pronouns,open_to,discoverable,allow_requests,allow_group_pings,created_at,updated_at FROM profiles WHERE guild_id=? AND user_id=?').get(guildId, userId);
-    return row ? rowBool(row, ['discoverable', 'allow_requests', 'allow_group_pings']) : null;
+    const row = db.prepare('SELECT guild_id,user_id,bio,profile_image,pronouns,open_to,discoverable,allow_requests,allow_group_pings,publish_to_board,created_at,updated_at FROM profiles WHERE guild_id=? AND user_id=?').get(guildId, userId);
+    return row ? rowBool(row, ['discoverable', 'allow_requests', 'allow_group_pings', 'publish_to_board']) : null;
   };
   const saveProfile = (guildId, userId, patch = {}) => {
     ensureGuild(guildId); requiredId(userId, 'user id');
@@ -175,16 +254,49 @@ export function createStore({ databasePath, backupDir = null } = {}) {
     if (entries.length !== Object.keys(patch).filter((key) => patch[key] !== undefined).length) throw new TypeError('Unknown profile field');
     db.prepare("INSERT INTO profiles (guild_id,user_id,created_at,updated_at) VALUES (?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(guild_id,user_id) DO NOTHING").run(guildId,userId);
     if (entries.length) {
-      const values = entries.map(([key,value]) => ['discoverable','allow_requests','allow_group_pings'].includes(key) ? bool(value,key) : optionalText(value,key,key === 'bio' ? 2000 : 200));
+      const values = entries.map(([key,value]) => ['discoverable','allow_requests','allow_group_pings','publish_to_board'].includes(key) ? bool(value,key) : optionalText(value,key,key === 'bio' ? 2000 : 200));
       db.prepare(`UPDATE profiles SET ${entries.map(([key]) => `${key}=?`).join(',')},updated_at=CURRENT_TIMESTAMP WHERE guild_id=? AND user_id=?`).run(...values,guildId,userId);
     }
     return getProfile(guildId,userId);
   };
   const updatePrivacy = (guildId,userId,patch = {}) => {
-    const allowed = new Set(['discoverable', 'allow_requests', 'allow_group_pings']);
+    const allowed = new Set(['discoverable', 'allow_requests', 'allow_group_pings', 'publish_to_board']);
     for (const key of Object.keys(patch)) if (!allowed.has(key)) throw new TypeError('Unknown privacy field');
+    if (patch.discoverable === false || patch.discoverable === 0) patch = { ...patch, publish_to_board: false };
     return saveProfile(guildId,userId,patch);
   };
+
+  const getBioBoardMessage = (guildId, userId) => db.prepare(
+    'SELECT guild_id,user_id,channel_id,message_id,created_at,updated_at FROM bio_board_messages WHERE guild_id=? AND user_id=?',
+  ).get(requiredId(guildId, 'guild id'), requiredId(userId, 'user id')) || null;
+  const listBioBoardMessages = (guildId, { channelId = null } = {}) => {
+    requiredId(guildId, 'guild id');
+    if (channelId != null) requiredId(channelId, 'channel id');
+    return channelId == null
+      ? db.prepare('SELECT guild_id,user_id,channel_id,message_id,created_at,updated_at FROM bio_board_messages WHERE guild_id=? ORDER BY user_id').all(guildId)
+      : db.prepare('SELECT guild_id,user_id,channel_id,message_id,created_at,updated_at FROM bio_board_messages WHERE guild_id=? AND channel_id=? ORDER BY user_id').all(guildId, channelId);
+  };
+  const saveBioBoardMessage = (guildId, userId, channelId, messageId) => {
+    ensureGuild(guildId);
+    requiredId(userId, 'user id'); requiredId(channelId, 'channel id'); requiredId(messageId, 'message id');
+    if (!getProfile(guildId, userId)) throw new RangeError('Profile is required for a bio board message');
+    db.prepare(`INSERT INTO bio_board_messages (guild_id,user_id,channel_id,message_id)
+      VALUES (?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET
+      channel_id=excluded.channel_id,message_id=excluded.message_id,updated_at=CURRENT_TIMESTAMP`).run(guildId, userId, channelId, messageId);
+    return getBioBoardMessage(guildId, userId);
+  };
+  const deleteBioBoardMessage = (guildId, userId) => db.prepare(
+    'DELETE FROM bio_board_messages WHERE guild_id=? AND user_id=?',
+  ).run(requiredId(guildId, 'guild id'), requiredId(userId, 'user id')).changes > 0;
+  const listBoardEligibleProfiles = (guildId) => db.prepare(
+    'SELECT guild_id,user_id,bio,profile_image,pronouns,open_to,discoverable,allow_requests,allow_group_pings,publish_to_board,created_at,updated_at FROM profiles WHERE guild_id=? AND discoverable=1 AND publish_to_board=1 ORDER BY updated_at DESC,user_id',
+  ).all(requiredId(guildId, 'guild id')).map((row) => rowBool(row, ['discoverable', 'allow_requests', 'allow_group_pings', 'publish_to_board']));
+  const listBoardGuilds = () => db.prepare(
+    'SELECT guild_id,bio_board_channel_id FROM guilds WHERE bio_board_channel_id IS NOT NULL ORDER BY guild_id',
+  ).all();
+  const clearBoardOptIns = (guildId) => db.prepare(
+    'UPDATE profiles SET publish_to_board=0 WHERE guild_id=? AND publish_to_board=1',
+  ).run(requiredId(guildId, 'guild id')).changes;
 
   const listUserTags = (guildId,userId) => db.prepare('SELECT t.guild_id,t.tag_slug,t.display_name,t.category,t.created_by,tm.added_at FROM tag_members tm JOIN tags t ON t.guild_id=tm.guild_id AND t.tag_slug=tm.tag_slug WHERE tm.guild_id=? AND tm.user_id=? ORDER BY lower(t.display_name),t.tag_slug').all(requiredId(guildId,'guild id'),requiredId(userId,'user id'));
   const addTag = (guildId, slug, displayName, createdBy, category='general', { bypassUgc = false } = {}) => { ensureGuild(guildId); if (!getGuildSettings(guildId).allow_ugc_tags && !bypassUgc) throw new RangeError('This server does not allow member-created tags'); tagSlug(slug); requiredId(createdBy,'creator id'); displayName=optionalText(displayName,'display name',80); category=optionalText(category,'category',32); if (!displayName || !category) throw new TypeError('Tag display name and category are required'); db.prepare("INSERT INTO tags (guild_id,tag_slug,display_name,created_by,category) VALUES (?,?,?,?,?) ON CONFLICT(guild_id,tag_slug) DO UPDATE SET display_name=excluded.display_name,category=excluded.category,updated_at=CURRENT_TIMESTAMP").run(guildId,slug,displayName,createdBy,category); return getTag(guildId,slug); };
@@ -222,6 +334,80 @@ export function createStore({ databasePath, backupDir = null } = {}) {
   const getLastGather = (guildId, senderId) => db.prepare('SELECT * FROM gather_events WHERE guild_id=? AND sender_id=? ORDER BY created_at DESC,id DESC LIMIT 1').get(requiredId(guildId,'guild id'),requiredId(senderId,'sender id')) || null;
   const deleteGatherEvent = (id, senderId) => db.prepare('DELETE FROM gather_events WHERE id=? AND sender_id=?').run(Number(id), requiredId(senderId, 'sender id')).changes > 0;
 
+  const hydrateGatherPlan = (row) => {
+    if (!row) return null;
+    return { ...row, interest_slugs: readJsonArray(row.interest_slugs), recipient_ids: readJsonArray(row.recipient_ids) };
+  };
+  const expireGatherPlans = (guildId = null) => {
+    const sql = guildId == null
+      ? "UPDATE gather_plans SET status='expired',updated_at=CURRENT_TIMESTAMP WHERE status='pending' AND expires_at IS NOT NULL AND datetime(expires_at) <= datetime('now')"
+      : "UPDATE gather_plans SET status='expired',updated_at=CURRENT_TIMESTAMP WHERE guild_id=? AND status='pending' AND expires_at IS NOT NULL AND datetime(expires_at) <= datetime('now')";
+    if (guildId != null) requiredId(guildId, 'guild id');
+    return db.prepare(sql).run(...(guildId == null ? [] : [guildId])).changes;
+  };
+  const getGatherPlan = (id) => {
+    const planId = Number(id);
+    if (!Number.isInteger(planId) || planId < 1) throw new TypeError('Invalid gather plan id');
+    expireGatherPlans();
+    return hydrateGatherPlan(db.prepare('SELECT * FROM gather_plans WHERE id=?').get(planId));
+  };
+  const createGatherPlan = (input = {}) => {
+    const guildId = requiredId(input.guildId, 'guild id');
+    const senderId = requiredId(input.senderId, 'sender id');
+    const channelId = requiredId(input.channelId, 'channel id');
+    const messageId = requiredId(input.messageId, 'message id');
+    const recipientIds = [...new Set(jsonArray(input.recipientIds, 'recipient ids', { maxItems: 12, item: (id) => requiredId(id, 'recipient id') }))];
+    const interestSlugs = [...new Set(jsonArray(input.interestSlugs, 'interest slugs', { maxItems: 10, item: (slug) => tagSlug(slug) }))];
+    if (!recipientIds.length || recipientIds.includes(senderId)) throw new RangeError('Gathering recipients must be invited members other than the host');
+    if (!interestSlugs.length) throw new RangeError('A gathering plan needs at least one interest');
+    const activity = optionalText(input.activity, 'activity', 160);
+    const invitation = optionalText(input.invitation, 'invitation', 500);
+    const startsAt = optionalText(input.startsAt, 'starts at', 120);
+    const expiresAt = optionalDate(input.expiresAt, 'expires at');
+    const createdAt = input.createdAt == null ? null : optionalDate(input.createdAt, 'created at');
+    ensureGuild(guildId);
+    const result = db.prepare(`INSERT INTO gather_plans
+      (guild_id,sender_id,channel_id,message_id,activity,invitation,starts_at,interest_slugs,recipient_ids,expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP))`).run(
+      guildId, senderId, channelId, messageId, activity, invitation, startsAt, JSON.stringify(interestSlugs), JSON.stringify(recipientIds), expiresAt, createdAt,
+    );
+    return getGatherPlan(result.lastInsertRowid);
+  };
+  const deleteGatherPlan = (planId) => {
+    const id = Number(planId);
+    if (!Number.isInteger(id) || id < 1) throw new TypeError('Invalid gather plan id');
+    return db.prepare('DELETE FROM gather_plans WHERE id=?').run(id).changes > 0;
+  };
+  const listGatherRsvps = (planId) => {
+    const id = Number(planId);
+    if (!Number.isInteger(id) || id < 1) throw new TypeError('Invalid gather plan id');
+    return db.prepare('SELECT plan_id,user_id,response,created_at,updated_at FROM gather_rsvps WHERE plan_id=? ORDER BY user_id').all(id);
+  };
+  const recordGatherRsvp = db.transaction((planId, userId, response) => {
+    const plan = getGatherPlan(planId);
+    if (!plan) throw new RangeError('Gathering plan is unavailable');
+    userId = requiredId(userId, 'user id');
+    if (!['yes', 'maybe', 'no'].includes(response)) throw new TypeError('Invalid RSVP response');
+    if (plan.status !== 'pending') throw new RangeError('Gathering is no longer taking RSVPs');
+    if (!plan.recipient_ids.includes(userId)) throw new RangeError('Only invited members can RSVP');
+    db.prepare(`INSERT INTO gather_rsvps (plan_id,user_id,response) VALUES (?,?,?)
+      ON CONFLICT(plan_id,user_id) DO UPDATE SET response=excluded.response,updated_at=CURRENT_TIMESTAMP`).run(plan.id, userId, response);
+    const rsvps = listGatherRsvps(plan.id);
+    const counts = rsvps.reduce((result, rsvp) => ({ ...result, [rsvp.response]: result[rsvp.response] + 1 }), { yes: 0, maybe: 0, no: 0 });
+    return { plan: getGatherPlan(plan.id), counts, response: rsvps.find((rsvp) => rsvp.user_id === userId) };
+  });
+  const setGatherConversation = db.transaction((planId, { threadId } = {}) => {
+    const plan = getGatherPlan(planId);
+    if (!plan) throw new RangeError('Gathering plan is unavailable');
+    threadId = requiredId(threadId, 'thread id');
+    if (plan.status === 'open' && plan.thread_id === threadId) return plan;
+    if (plan.status !== 'pending') throw new RangeError('Gathering is not pending');
+    const attendees = db.prepare("SELECT COUNT(*) AS count FROM gather_rsvps WHERE plan_id=? AND response='yes'").get(plan.id).count;
+    if (attendees < 1) throw new RangeError('At least one invited member must RSVP yes before opening a room');
+    db.prepare("UPDATE gather_plans SET status='open',thread_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'").run(threadId, plan.id);
+    return getGatherPlan(plan.id);
+  });
+
   const getTheme=(guildId,userId)=>db.prepare('SELECT theme,primary_color,secondary_color,title,tags_emoji,updated_at FROM user_themes WHERE guild_id=? AND user_id=?').get(requiredId(guildId,'guild id'),requiredId(userId,'user id'))||null;
   const updateTheme=(guildId,userId,patch={})=>{ saveProfile(guildId,userId,{}); const entries=Object.entries(patch).filter(([key,value])=>value!==undefined&&THEME_FIELDS.has(key)); if(entries.length!==Object.keys(patch).filter(key=>patch[key]!==undefined).length)throw new TypeError('Unknown theme field'); if(!entries.length)return getTheme(guildId,userId); db.prepare(`INSERT INTO user_themes (guild_id,user_id,${entries.map(([key])=>key).join(',')},updated_at) VALUES (?,?,${entries.map(()=>'?').join(',')},CURRENT_TIMESTAMP) ON CONFLICT(guild_id,user_id) DO UPDATE SET ${entries.map(([key])=>`${key}=excluded.${key}`).join(',')},updated_at=CURRENT_TIMESTAMP`).run(guildId,userId,...entries.map(([key,value])=>optionalText(value,key,128))); return getTheme(guildId,userId);};
   const getBoundaries=(guildId,userId)=>{const row=db.prepare('SELECT guild_id,user_id,data,privacy_level,privacy_role_id,created_at,updated_at FROM boundaries WHERE guild_id=? AND user_id=?').get(requiredId(guildId,'guild id'),requiredId(userId,'user id'));if(!row)return null;try{row.data=row.data?JSON.parse(row.data):{};}catch{row.data={};}return row;};
@@ -239,11 +425,11 @@ export function createStore({ databasePath, backupDir = null } = {}) {
   const blockUser=(guildId,blockerId,blockedId)=>{ensureGuild(guildId);requiredId(blockerId,'blocker id');requiredId(blockedId,'blocked id');if(blockerId===blockedId)throw new TypeError('Cannot block yourself');db.prepare('INSERT INTO connection_blocks (guild_id,blocker_id,blocked_id) VALUES (?,?,?) ON CONFLICT DO NOTHING').run(guildId,blockerId,blockedId);db.prepare("UPDATE connection_requests SET status='cancelled',responded_at=CURRENT_TIMESTAMP WHERE guild_id=? AND status='pending' AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))").run(guildId,blockerId,blockedId,blockedId,blockerId);return true;};
   const unblockUser=(guildId,blockerId,blockedId)=>db.prepare('DELETE FROM connection_blocks WHERE guild_id=? AND blocker_id=? AND blocked_id=?').run(requiredId(guildId,'guild id'),requiredId(blockerId,'blocker id'),requiredId(blockedId,'blocked id')).changes>0;
   const isBlocked=(guildId,a,b)=>Boolean(db.prepare('SELECT 1 FROM connection_blocks WHERE guild_id=? AND ((blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?))').get(requiredId(guildId,'guild id'),requiredId(a,'user id'),requiredId(b,'user id'),b,a));
-  const deleteUserData=db.transaction((guildId,userId)=>{requiredId(guildId,'guild id');requiredId(userId,'user id');db.prepare('DELETE FROM gather_events WHERE guild_id=? AND sender_id=?').run(guildId,userId);db.prepare('DELETE FROM connection_blocks WHERE guild_id=? AND (blocker_id=? OR blocked_id=?)').run(guildId,userId,userId);db.prepare('DELETE FROM connection_requests WHERE guild_id=? AND (sender_id=? OR recipient_id=?)').run(guildId,userId,userId);db.prepare('DELETE FROM tag_members WHERE guild_id=? AND user_id=?').run(guildId,userId);db.prepare('DELETE FROM user_themes WHERE guild_id=? AND user_id=?').run(guildId,userId);db.prepare('DELETE FROM boundaries WHERE guild_id=? AND user_id=?').run(guildId,userId);return db.prepare('DELETE FROM profiles WHERE guild_id=? AND user_id=?').run(guildId,userId).changes>0;});
-  const stats=(guildId=null)=>{const suffix=guildId?' WHERE guild_id=?':'';const arg=guildId?[requiredId(guildId,'guild id')]:[];const count=(table)=>db.prepare(`SELECT COUNT(*) AS count FROM ${table}${suffix}`).get(...arg).count;return {guilds:count('guilds'),profiles:count('profiles'),tags:count('tags'),tag_members:count('tag_members'),user_themes:count('user_themes'),boundaries:count('boundaries'),connection_requests:count('connection_requests'),connection_blocks:count('connection_blocks'),gather_events:count('gather_events')};};
+  const deleteUserData=db.transaction((guildId,userId)=>{requiredId(guildId,'guild id');requiredId(userId,'user id');db.prepare('DELETE FROM gather_events WHERE guild_id=? AND sender_id=?').run(guildId,userId);db.prepare('DELETE FROM gather_plans WHERE guild_id=? AND sender_id=?').run(guildId,userId);db.prepare('DELETE FROM gather_rsvps WHERE user_id=?').run(userId);db.prepare('DELETE FROM connection_blocks WHERE guild_id=? AND (blocker_id=? OR blocked_id=?)').run(guildId,userId,userId);db.prepare('DELETE FROM connection_requests WHERE guild_id=? AND (sender_id=? OR recipient_id=?)').run(guildId,userId,userId);db.prepare('DELETE FROM tag_members WHERE guild_id=? AND user_id=?').run(guildId,userId);db.prepare('DELETE FROM user_themes WHERE guild_id=? AND user_id=?').run(guildId,userId);db.prepare('DELETE FROM boundaries WHERE guild_id=? AND user_id=?').run(guildId,userId);return db.prepare('DELETE FROM profiles WHERE guild_id=? AND user_id=?').run(guildId,userId).changes>0;});
+  const stats=(guildId=null)=>{const suffix=guildId?' WHERE guild_id=?':'';const arg=guildId?[requiredId(guildId,'guild id')]:[];const count=(table)=>db.prepare(`SELECT COUNT(*) AS count FROM ${table}${suffix}`).get(...arg).count;const rsvpCount=guildId?db.prepare('SELECT COUNT(*) AS count FROM gather_rsvps r JOIN gather_plans p ON p.id=r.plan_id WHERE p.guild_id=?').get(guildId).count:count('gather_rsvps');return {guilds:count('guilds'),profiles:count('profiles'),tags:count('tags'),tag_members:count('tag_members'),user_themes:count('user_themes'),boundaries:count('boundaries'),connection_requests:count('connection_requests'),connection_blocks:count('connection_blocks'),gather_events:count('gather_events'),gather_plans:count('gather_plans'),gather_rsvps:rsvpCount};};
   const integrityCheck=()=>db.pragma('integrity_check');
   const backup=(destination=null)=>{if(isMemory)throw new Error('Cannot back up an in-memory database');const target=destination||path.join(backupDir||path.dirname(path.resolve(databasePath)),'backups',`${path.basename(databasePath)}.${new Date().toISOString().replace(/[:.]/g,'-')}.bak`);fs.mkdirSync(path.dirname(path.resolve(target)),{recursive:true});db.pragma('wal_checkpoint(TRUNCATE)');fs.copyFileSync(databasePath,target);return target;};
   const close=()=>db.close();
   const transaction=(work)=>{if(typeof work!=='function')throw new TypeError('transaction work must be a function');return db.transaction(work)();};
-  return {db,transaction,ensureGuild,getGuildSettings,updateGuildSettings,getProfile,saveProfile,updatePrivacy,listUserTags,addTag,getTag,removeTag,listTags,searchTags,addUserTag,removeUserTag,setUserTags,discoverProfiles,findGatherCandidates,recordGather,getLastGather,deleteGatherEvent,getTheme,updateTheme,getBoundaries,saveBoundaries,updateBoundariesPrivacy,deleteBoundaries,createConnectionRequest,getConnectionRequest,getPendingConnectionRequest,setConnectionRequestStatus,listConnectionRequests,countConnectionRequests,getRequestCooldown,blockUser,unblockUser,isBlocked,deleteUserData,stats,integrityCheck,backup,close};
+  return {db,transaction,ensureGuild,getGuildSettings,updateGuildSettings,getProfile,saveProfile,updatePrivacy,getBioBoardMessage,listBioBoardMessages,saveBioBoardMessage,deleteBioBoardMessage,listBoardEligibleProfiles,listBoardGuilds,clearBoardOptIns,listUserTags,addTag,getTag,removeTag,listTags,searchTags,addUserTag,removeUserTag,setUserTags,discoverProfiles,findGatherCandidates,recordGather,getLastGather,deleteGatherEvent,createGatherPlan,deleteGatherPlan,getGatherPlan,recordGatherRsvp,listGatherRsvps,setGatherConversation,expireGatherPlans,getTheme,updateTheme,getBoundaries,saveBoundaries,updateBoundariesPrivacy,deleteBoundaries,createConnectionRequest,getConnectionRequest,getPendingConnectionRequest,setConnectionRequestStatus,listConnectionRequests,countConnectionRequests,getRequestCooldown,blockUser,unblockUser,isBlocked,deleteUserData,stats,integrityCheck,backup,close};
 }

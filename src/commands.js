@@ -46,7 +46,7 @@ const commandBuilders = [
 
     new SlashCommandBuilder()
         .setName('invite')
-        .setDescription('Invite interested people to a small conversation')
+        .setDescription('Invite interested people to a small plan together')
         .addStringOption((option) => option
             .setName('interests')
             .setDescription('Interests to invite, separated by commas')
@@ -56,7 +56,15 @@ const commandBuilders = [
             .setName('message')
             .setDescription('Your invitation')
             .setMaxLength(500)
-            .setRequired(true)),
+            .setRequired(true))
+        .addStringOption((option) => option
+            .setName('activity')
+            .setDescription('What would you do together? (optional)')
+            .setMaxLength(160))
+        .addStringOption((option) => option
+            .setName('when')
+            .setDescription('When would you do it? (optional)')
+            .setMaxLength(120)),
 
     new SlashCommandBuilder()
         .setName('setup')

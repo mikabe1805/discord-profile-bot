@@ -67,7 +67,7 @@ test('a first profile edit is stored privately and returns explicit consent cont
   assert.deepEqual(store.listUserTags('200', '100').map((tag) => tag.tag_slug), ['art', 'board-games']);
   assert.deepEqual(interaction.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
   const response = interaction.replies.at(-1)[1];
-  assert.match(response.content, /saved privately/i);
+  assert.match(response.content, /private until you choose/i);
   assert.deepEqual(response.allowedMentions, { parse: [], repliedUser: false });
   assert.equal(response.components[0].components.length, 3);
 });
@@ -84,11 +84,192 @@ test('a new member gets the private Bio home with a clear first choice', async (
   await handler(interaction);
 
   const response = interaction.replies.at(-1)[1];
-  assert.match(response.embeds[0].data.title, /small corner/i);
-  assert.equal(response.components.length, 2);
-  assert.equal(response.components[0].components[0].data.custom_id, 'bio:path:100');
-  assert.equal(response.components[1].components[0].data.label, 'Write from scratch');
+  assert.match(response.embeds[0].data.title, /start with one line/i);
+  assert.equal(response.components.length, 1);
+  assert.equal(response.components[0].components[0].data.custom_id, 'bio:write:100');
+  assert.equal(response.components[0].components[0].data.label, 'Start with one line');
+  assert.equal(response.components[0].components[1].data.custom_id, 'bio:full:100');
   assert.equal(response.flags, MessageFlags.Ephemeral);
+});
+
+test('quick start asks for one conversational hook and keeps the new Bio private', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+
+  const open = baseInteraction({ customId: 'bio:write:100', isButton: () => true });
+  await handler(open);
+  const modal = open.replies.at(-1)[1].toJSON();
+  assert.equal(modal.custom_id, 'profile:quick:100');
+  assert.equal(modal.components.length, 2);
+  assert.equal(modal.components[0].components[0].custom_id, 'open_to');
+  assert.equal(modal.components[0].components[0].required, true);
+  assert.equal(modal.components[1].components[0].custom_id, 'bio');
+  assert.equal(modal.components[1].components[0].required, false);
+
+  const submit = baseInteraction({
+    customId: 'profile:quick:100',
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: (name) => ({ open_to: 'talk about cozy games', bio: 'i make tiny games' })[name] },
+  });
+  await handler(submit);
+  const profile = store.getProfile('200', '100');
+  assert.equal(profile.open_to, 'talk about cozy games');
+  assert.equal(profile.bio, 'i make tiny games');
+  assert.equal(profile.discoverable, false);
+  assert.match(submit.replies.at(-1)[1].content, /private until you choose/i);
+});
+
+test('publishing to the Bio channel is explicit, updates the existing card, and can be withdrawn', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.updateGuildSettings('200', { bio_board_channel_id: '700' });
+  const calls = [];
+  const board = {
+    async publish(payload) { calls.push(['publish', payload]); return { ok: true }; },
+    async unpublish(payload) { calls.push(['unpublish', payload]); return { ok: true }; },
+  };
+  const self = { id: '100', username: 'Mika', displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const member = { id: '100', displayName: 'Mika', user: self, roles: { cache: new Map() }, displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const channel = { id: '700', send() {} };
+  const guild = {
+    id: '200',
+    members: { cache: new Map([['100', member]]), fetch: async () => member },
+    channels: { fetch: async (id) => id === '700' ? channel : null },
+  };
+  const handler = createInteractionHandler({ store, media, ...inactive, board, logger });
+
+  const first = baseInteraction({
+    guild,
+    customId: 'profile:quick:100',
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: (name) => ({ open_to: 'make a game together', bio: 'i like game jams' })[name] },
+  });
+  await handler(first);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'unpublish');
+  assert.equal(store.getProfile('200', '100').publish_to_board, false);
+
+  const publish = baseInteraction({ guild, customId: 'share:hellos:100', isButton: () => true });
+  await handler(publish);
+  assert.equal(store.getProfile('200', '100').discoverable, true);
+  assert.equal(store.getProfile('200', '100').publish_to_board, true);
+  assert.equal(calls.at(-1)[0], 'publish');
+  assert.equal(calls.at(-1)[1].channel, channel);
+  assert.match(publish.replies.at(-1)[1].content, /published in <#700>/i);
+
+  const withdraw = baseInteraction({ guild, customId: 'share:private:100', isButton: () => true });
+  await handler(withdraw);
+  assert.equal(store.getProfile('200', '100').publish_to_board, false);
+  assert.equal(calls.at(-1)[0], 'unpublish');
+  assert.match(withdraw.replies.at(-1)[1].content, /private/i);
+});
+
+test('legacy profile preferences remove a published card when directory visibility is turned off', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.updateGuildSettings('200', { bio_board_channel_id: '700' });
+  store.saveProfile('200', '100', { bio: 'already public', discoverable: true, publish_to_board: true });
+  const calls = [];
+  const board = {
+    async publish(payload) { calls.push(['publish', payload]); return { ok: true }; },
+    async unpublish(payload) { calls.push(['unpublish', payload]); return { ok: true }; },
+  };
+  const self = { id: '100', username: 'Mika', displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const member = { id: '100', displayName: 'Mika', user: self, roles: { cache: new Map() }, displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const channel = { id: '700', send() {} };
+  const guild = { id: '200', members: { cache: new Map([['100', member]]), fetch: async () => member }, channels: { fetch: async () => channel } };
+  const interaction = baseInteraction({
+    guild, commandName: 'profile', isChatInputCommand: () => true,
+    options: {
+      getSubcommandGroup: () => null,
+      getSubcommand: () => 'preferences',
+      getBoolean: (name) => name === 'directory' ? false : null,
+    },
+  });
+  const handler = createInteractionHandler({ store, media, ...inactive, board, logger });
+  await handler(interaction);
+
+  assert.equal(store.getProfile('200', '100').discoverable, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'unpublish');
+  assert.equal(calls[0][1].channel, channel);
+});
+
+test('legacy interest and photo commands refresh an opted-in public Bio card', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.updateGuildSettings('200', { bio_board_channel_id: '700' });
+  store.saveProfile('200', '100', { bio: 'already public', discoverable: true, publish_to_board: true });
+  const calls = [];
+  const board = {
+    async publish(payload) { calls.push(payload); return { ok: true }; },
+    async unpublish() { throw new Error('a published profile should update, not be removed'); },
+  };
+  const self = { id: '100', username: 'Mika', displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const member = { id: '100', displayName: 'Mika', user: self, roles: { cache: new Map() }, displayAvatarURL: () => 'https://example.com/avatar.png' };
+  const channel = { id: '700', send() {} };
+  const guild = { id: '200', members: { cache: new Map([['100', member]]), fetch: async () => member }, channels: { fetch: async () => channel } };
+  const profileMedia = { ...media, save: async () => 'local:profile-images/200/100.jpg' };
+  const handler = createInteractionHandler({ store, media: profileMedia, ...inactive, board, logger });
+
+  const interests = baseInteraction({
+    guild, commandName: 'profile', isChatInputCommand: () => true,
+    options: {
+      getSubcommandGroup: () => 'interests', getSubcommand: () => 'add',
+      getString: () => 'Film photography',
+    },
+  });
+  await handler(interests);
+  assert.deepEqual(store.listUserTags('200', '100').map((tag) => tag.tag_slug), ['film-photography']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].channel, channel);
+
+  const image = baseInteraction({
+    guild, commandName: 'profile', isChatInputCommand: () => true,
+    options: {
+      getSubcommandGroup: () => 'image', getSubcommand: () => 'set',
+      getAttachment: () => ({ id: 'photo', url: 'https://example.com/photo.jpg', contentType: 'image/jpeg' }),
+    },
+  });
+  await handler(image);
+  assert.equal(store.getProfile('200', '100').profile_image, 'local:profile-images/200/100.jpg');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].channel, channel);
+});
+
+test('/find gives a member a shared interest, an invitation hook, and a way to open the card', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.saveProfile('200', '100', { open_to: 'find a study partner' });
+  store.saveProfile('200', '300', { bio: 'i build small robots', open_to: 'compare project ideas', discoverable: true });
+  store.addTag('200', 'robotics', 'Robotics', '100', 'custom', { bypassUgc: true });
+  store.setUserTags('200', '100', ['robotics']);
+  store.setUserTags('200', '300', ['robotics']);
+  const june = { id: '300', username: 'June', displayAvatarURL: () => 'https://example.com/june.png' };
+  const guild = {
+    id: '200',
+    members: {
+      cache: new Map([
+        ['100', { id: '100', displayName: 'Mika', user: { id: '100', bot: false }, roles: { cache: new Map() } }],
+        ['300', { id: '300', displayName: 'June', user: june, roles: { cache: new Map() } }],
+      ]),
+      fetch: async () => null,
+    },
+  };
+  const interaction = baseInteraction({
+    guild, commandName: 'find', isChatInputCommand: () => true,
+    options: { getString: () => null },
+  });
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+  await handler(interaction);
+
+  const response = interaction.replies.at(-1)[1];
+  assert.match(response.embeds[0].data.description, /You both chose Robotics/);
+  assert.match(response.embeds[0].data.description, /Open to: compare project ideas/);
+  const chooser = response.components[0].toJSON().components[0];
+  assert.equal(chooser.custom_id, 'find:choose:100');
+  assert.equal(chooser.options[0].value, '300');
 });
 
 test('invite commits only after its owner confirms the private preview', async () => {
@@ -152,6 +333,53 @@ test('a failed confirmed invite releases its cooldown reservation', async () => 
   assert.match(confirm.replies.at(-1)[1].content, /Something went wrong/);
 });
 
+test('an RSVP edit failure removes its posted invite and durable plan', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  const calls = [];
+  const gather = {
+    async prepare() {
+      return {
+        ok: true, interestSlugs: ['games'], recipientIds: ['300'],
+        payload: { content: 'game night', allowedMentions: { parse: [], users: ['300'] } },
+        commit: () => calls.push('commit'), rollback: () => calls.push('rollback'),
+      };
+    },
+  };
+  const rsvp = {
+    async create(input) {
+      const plan = store.createGatherPlan(input);
+      calls.push('plan');
+      return { plan, payload: { content: 'RSVP here' } };
+    },
+  };
+  const channel = {
+    id: '700',
+    async send() {
+      calls.push('send');
+      return {
+        id: '800', channelId: '700',
+        async edit() { calls.push('edit'); throw new Error('cannot edit'); },
+        async delete() { calls.push('delete'); },
+      };
+    },
+  };
+  const handler = createInteractionHandler({ store, media, ...inactive, gather, rsvp, logger });
+  const preview = baseInteraction({
+    commandName: 'invite', isChatInputCommand: () => true, channel, channelId: '700',
+    options: { getString: (name) => ({ interests: 'games', message: 'game night' })[name] || null },
+  });
+  await handler(preview);
+  const sendId = preview.replies.at(-1)[1].components[0].components[0].data.custom_id;
+  const confirm = baseInteraction({ customId: sendId, isButton: () => true, channel, channelId: '700' });
+  await handler(confirm);
+
+  assert.deepEqual(calls, ['commit', 'send', 'plan', 'edit', 'delete', 'rollback']);
+  assert.equal(store.getGatherPlan(1), null);
+  assert.equal(store.stats('200').gather_plans, 0);
+  assert.match(confirm.replies.at(-1)[1].content, /Something went wrong/);
+});
+
 test('connection buttons map to persisted accepted and declined states', async () => {
   const calls = [];
   const store = {
@@ -159,7 +387,7 @@ test('connection buttons map to persisted accepted and declined states', async (
     getConnectionRequest: () => ({ id: 9, guild_id: '200', sender_id: '300', recipient_id: '100', status: 'pending' }),
   };
   const connections = {
-    async respond(payload) { calls.push(payload); return { ok: true }; },
+    async respond(payload) { calls.push(payload); return { ok: true, intro: 'You both chose **Board games**. They are open to: game nights.' }; },
     async blockRequest() { return { ok: true }; },
   };
   const interaction = baseInteraction({ customId: 'conn:accept:9', isButton: () => true, inGuild: () => false, guildId: null, guild: null });
@@ -168,6 +396,7 @@ test('connection buttons map to persisted accepted and declined states', async (
   assert.deepEqual(calls, [{ requestId: 9, actorId: '100', status: 'accepted' }]);
   assert.deepEqual(interaction.replies.at(-2), ['deferUpdate']);
   assert.match(interaction.replies.at(-1)[1].content, /Accepted/);
+  assert.match(interaction.replies.at(-1)[1].content, /You both chose/);
 });
 
 test('the renamed View Bio context keeps private cards private', async () => {
@@ -405,7 +634,7 @@ test('modal and command photo uploads preserve the chosen vibe and title', async
   assert.equal(savedAttachments.length, 2);
   assert.equal(store.getTheme('200', '100').title, 'Mika after dark');
   assert.equal(store.getTheme('200', '100').theme, 'quiet-green');
-  assert.match(commandUpload.replies.at(-1)[1].content, /vibe and title stayed the same/i);
+  assert.match(commandUpload.replies.at(-1)[1].content, /saved your photo/i);
 });
 
 test('a rejected modal upload keeps the existing card and returns to the photo controls', async (t) => {
@@ -492,7 +721,7 @@ test('sharing presets make every consent choice explicit', async (t) => {
   assert.equal(profile.discoverable, true);
   assert.equal(profile.allow_requests, true);
   assert.equal(profile.allow_group_pings, true);
-  assert.match(interaction.replies.at(-1)[1].content, /open to directory/i);
+  assert.match(interaction.replies.at(-1)[1].content, /people can find you/i);
 });
 
 test('the connection home exposes sent requests and lets an owner undo a block', async (t) => {
@@ -647,6 +876,37 @@ test('setup can curate custom interests and change the profile limit without old
   assert.equal(store.getGuildSettings('200').max_tags_per_user, 12);
 });
 
+test('an admin can post a Bio prompt in the configured Bio channel', async (t) => {
+  const store = createStore({ databasePath: ':memory:' });
+  t.after(() => store.close());
+  store.updateGuildSettings('200', { bio_board_channel_id: '700' });
+  const admin = { has: () => true };
+  const posted = [];
+  const channel = { id: '700', send: async (payload) => posted.push(payload) };
+  const guild = {
+    id: '200',
+    members: { cache: new Map(), fetch: async () => null },
+    channels: { fetch: async (id) => id === '700' ? channel : null },
+  };
+  const handler = createInteractionHandler({ store, media, ...inactive, logger });
+
+  const open = baseInteraction({ guild, customId: 'setup:prompt:100', isButton: () => true, memberPermissions: admin });
+  await handler(open);
+  const modal = open.replies.at(-1)[1].toJSON();
+  assert.equal(modal.custom_id, 'setup:prompt:100');
+  assert.equal(modal.components[0].components[0].custom_id, 'question');
+
+  const submit = baseInteraction({
+    guild, customId: 'setup:prompt:100', isModalSubmit: () => true, memberPermissions: admin,
+    fields: { getTextInputValue: () => 'What have you been making lately?' },
+  });
+  await handler(submit);
+  assert.equal(posted.length, 1);
+  assert.match(posted[0].embeds[0].data.description, /What have you been making lately/);
+  assert.equal(posted[0].components[0].components[0].data.custom_id, 'start:bio');
+  assert.match(submit.replies.at(-1)[1].content, /Posted your question in <#700>/);
+});
+
 test('role selectors are routed into the optional interaction-note wizard', async () => {
   const calls = [];
   const store = { ensureGuild() {} };
@@ -666,7 +926,7 @@ test('a public start-card Bio button opens an existing private home ephemerally'
   await handler(interaction);
   assert.deepEqual(interaction.replies[0], ['defer', { flags: MessageFlags.Ephemeral }]);
   assert.equal(interaction.replies.some(([kind]) => kind === 'update'), false);
-  assert.match(interaction.replies.at(-1)[1].content, /private Bio home/i);
+  assert.match(interaction.replies.at(-1)[1].content, /private for now/i);
 });
 
 test('a rejected interest edit does not partially create or overwrite a profile', async (t) => {
