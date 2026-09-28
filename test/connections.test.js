@@ -2,15 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createConnectionService } from '../src/connections.js';
 
-function profile({ allow_requests = true } = {}) { return { allow_requests }; }
+function profile({ allow_requests = true, open_to = null } = {}) { return { allow_requests, open_to }; }
 
-function makeStore({ senderProfile = profile(), targetProfile = profile(), count = 0, previous = null } = {}) {
+function makeStore({ senderProfile = profile(), targetProfile = profile(), senderTags = [], targetTags = [], count = 0, previous = null } = {}) {
   let request = null;
   let id = 0;
   const calls = [];
   return {
     calls,
     getProfile(guildId, userId) { return userId === 'sender' ? senderProfile : targetProfile; },
+    listUserTags(guildId, userId) { return userId === 'sender' ? senderTags : targetTags; },
     countConnectionRequests() { return count; },
     getRequestCooldown() { return previous; },
     createConnectionRequest(guildId, senderId, recipientId, message) {
@@ -89,4 +90,29 @@ test('cancels an undeliverable request and verifies the recipient for responses 
   const blocked = await service.blockRequest({ requestId: 1, actorId: 'target' });
   assert.equal(blocked.code, 'blocked');
   assert.deepEqual(store.calls.at(-1), ['block', 'guild', 'target', 'sender']);
+});
+
+test('an accepted request privately gives each person their shared interests and chosen invitation', async () => {
+  const store = makeStore({
+    senderProfile: profile({ open_to: 'talking about mystery books' }),
+    targetProfile: profile({ open_to: 'a low-key co-op game sometime' }),
+    senderTags: [{ tag_slug: 'mystery', display_name: 'Mystery books' }, { tag_slug: 'games', display_name: 'Games' }],
+    targetTags: [{ tag_slug: 'games', display_name: 'Games' }, { tag_slug: 'art', display_name: 'Art' }],
+  });
+  const client = makeClient();
+  const target = { id: 'target', user: { bot: false }, async send() {} };
+  const service = createConnectionService({ store, client });
+  await service.send({ guild: makeGuild(target), sender: { id: 'sender', displayName: 'Sender' }, target: 'target' });
+
+  const accepted = await service.respond({ requestId: 1, actorId: 'target', status: 'accepted' });
+  assert.equal(accepted.code, 'accepted');
+  assert.match(accepted.intro, /\*\*Games\*\*/);
+  assert.match(accepted.intro, /talking about mystery books/);
+  assert.match(accepted.intro, /easy first message/i);
+  assert.equal(client.dms.length, 1);
+  const [, payload] = client.dms[0];
+  assert.deepEqual(payload.allowedMentions, { parse: [] });
+  assert.match(payload.embeds[0].data.description, /\*\*Games\*\*/);
+  assert.match(payload.embeds[0].data.description, /low-key co-op game sometime/);
+  assert.match(payload.embeds[0].data.footer.text, /Nothing was posted publicly/);
 });

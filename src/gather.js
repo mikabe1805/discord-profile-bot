@@ -3,6 +3,7 @@ import { normalizeInterestSlug, safeDisplayText } from './domain.js';
 const COOLDOWN_MS = 30 * 60 * 1000;
 const MAX_CANDIDATES = 30;
 const MAX_RECIPIENTS = 12;
+const RSVP_RESPONSES = new Set(['yes', 'maybe', 'no']);
 
 function result(code, message, extra = {}) {
   return { ok: false, code, message, ...extra };
@@ -18,6 +19,124 @@ function cleanInterests(interests) {
     .map((interest) => normalizeInterestSlug(interest))
     .filter(Boolean))]
     .slice(0, 10);
+}
+
+function cleanOptionalText(value, maxLength) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return safeDisplayText(value, { maxLength, fallback: '' }) || null;
+}
+
+function rsvpCounts(rsvps) {
+  return (rsvps || []).reduce((counts, rsvp) => {
+    if (RSVP_RESPONSES.has(rsvp?.response)) counts[rsvp.response] += 1;
+    return counts;
+  }, { yes: 0, maybe: 0, no: 0 });
+}
+
+function planHeading(plan) {
+  const activity = cleanOptionalText(plan.activity, 160);
+  const when = cleanOptionalText(plan.starts_at ?? plan.startsAt, 120);
+  return [activity || 'A small gathering', when ? `when: ${when}` : null].filter(Boolean).join(' · ');
+}
+
+/**
+ * Public message for a durable gathering plan. This uses Discord's raw component
+ * shape so callers can send or edit it without coupling this service to discord.js.
+ */
+export function buildGatherRsvpPayload(plan, rsvps = []) {
+  if (!plan?.id) throw new TypeError('plan with an id is required');
+  const counts = rsvpCounts(rsvps);
+  const hasConversation = Boolean(plan.thread_id ?? plan.threadId);
+  const expired = plan.status === 'expired';
+  const openable = !hasConversation && !expired && counts.yes > 0;
+  const interestText = (Array.isArray(plan.interest_slugs) ? plan.interest_slugs : [])
+    .map((slug) => safeDisplayText(String(slug).replace(/-/g, ' '), { maxLength: 80 }))
+    .join(' · ');
+  const invitation = cleanOptionalText(plan.invitation, 500);
+  const status = hasConversation
+    ? `A private conversation is open for the people who joined.\n${counts.yes} in · ${counts.maybe} maybe`
+    : expired ? 'This invitation has ended.'
+      : `${counts.yes} in · ${counts.maybe} maybe\nRSVP if you want to join. Once someone is in, the host can open a private conversation.`;
+  const buttons = [
+    { type: 2, style: 3, label: 'I’m in', custom_id: `gather:rsvp:${plan.id}:yes`, disabled: hasConversation || expired },
+    { type: 2, style: 2, label: 'Maybe', custom_id: `gather:rsvp:${plan.id}:maybe`, disabled: hasConversation || expired },
+    { type: 2, style: 2, label: 'Can’t make it', custom_id: `gather:rsvp:${plan.id}:no`, disabled: hasConversation || expired },
+  ];
+  if (openable) buttons.push({ type: 2, style: 1, label: 'Open a shared room', custom_id: `gather:start:${plan.id}` });
+  return {
+    content: `**${planHeading(plan)}**${interestText ? `\n${interestText}` : ''}${invitation ? `\n${invitation}` : ''}\n${status}`,
+    allowedMentions: { parse: [] },
+    components: [{ type: 1, components: buttons }],
+  };
+}
+
+/**
+ * Stateless RSVP coordinator. Its store is the source of truth, so buttons
+ * survive restarts and a pending plan stays honest until a real room exists.
+ */
+export function createGatherRsvpService({ store, now = () => new Date() } = {}) {
+  if (!store) throw new TypeError('store is required');
+  for (const method of ['createGatherPlan', 'getGatherPlan', 'recordGatherRsvp', 'listGatherRsvps', 'setGatherConversation']) {
+    if (typeof store[method] !== 'function') throw new TypeError(`store.${method} is required`);
+  }
+
+  async function payloadFor(plan) {
+    return buildGatherRsvpPayload(plan, await store.listGatherRsvps(plan.id));
+  }
+
+  return {
+    async create({ guildId, senderId, recipientIds, interestSlugs, activity, invitation, startsAt, channelId, messageId, expiresAt } = {}) {
+      if (!guildId || !senderId || !channelId || !messageId) throw new TypeError('guildId, senderId, channelId, and messageId are required');
+      const recipients = [...new Set((recipientIds || []).filter((id) => id && id !== senderId))].slice(0, MAX_RECIPIENTS);
+      if (!recipients.length) throw new RangeError('A gathering plan needs at least one invited member.');
+      const createdAt = now();
+      if (!(createdAt instanceof Date) || !Number.isFinite(createdAt.getTime())) throw new TypeError('now must return a valid Date');
+      const plan = await store.createGatherPlan({
+        guildId,
+        senderId,
+        recipientIds: recipients,
+        interestSlugs: cleanInterests(interestSlugs),
+        activity: cleanOptionalText(activity, 160),
+        invitation: cleanOptionalText(invitation, 500),
+        startsAt: cleanOptionalText(startsAt, 120),
+        channelId,
+        messageId,
+        expiresAt: expiresAt || null,
+        createdAt: createdAt.toISOString(),
+      });
+      return { plan, payload: await payloadFor(plan) };
+    },
+
+    async respond({ planId, userId, response } = {}) {
+      if (!planId || !userId || !RSVP_RESPONSES.has(response)) throw new RangeError('Choose an RSVP response.');
+      const plan = await store.getGatherPlan(planId);
+      if (!plan) return result('plan_missing', 'That gathering is no longer available.');
+      if (plan.status && plan.status !== 'pending') return result('plan_closed', 'That gathering is no longer taking RSVPs.');
+      const recipients = plan.recipient_ids ?? plan.recipientIds ?? [];
+      if (!recipients.includes(userId)) return result('not_invited', 'This RSVP is for the people invited to this gathering.');
+      await store.recordGatherRsvp(plan.id, userId, response);
+      const updated = await store.getGatherPlan(plan.id);
+      return { ok: true, plan: updated, payload: await payloadFor(updated) };
+    },
+
+    async readyToStart({ planId, userId } = {}) {
+      const plan = await store.getGatherPlan(planId);
+      if (!plan) return result('plan_missing', 'That gathering is no longer available.');
+      if (plan.sender_id !== userId && plan.senderId !== userId) return result('host_required', 'Only the person who started this gathering can open its shared room.');
+      if (plan.status !== 'pending') return result('plan_closed', 'This invitation is no longer open.');
+      if (plan.thread_id ?? plan.threadId) return result('already_open', 'The shared room is already open.');
+      const rsvps = await store.listGatherRsvps(plan.id);
+      const participantIds = [plan.sender_id ?? plan.senderId, ...rsvps.filter((rsvp) => rsvp.response === 'yes').map((rsvp) => rsvp.user_id ?? rsvp.userId)];
+      if (participantIds.length < 2) return result('needs_rsvp', 'Wait until at least one invited person is in before opening the shared room.');
+      return { ok: true, plan, participantIds, payload: buildGatherRsvpPayload(plan, rsvps) };
+    },
+
+    async markConversationOpen({ planId, threadId } = {}) {
+      if (!planId || !threadId) throw new TypeError('planId and threadId are required');
+      const plan = await store.setGatherConversation(planId, { threadId });
+      return { plan, payload: await payloadFor(plan) };
+    },
+  };
 }
 
 async function currentMember(guild, userId) {

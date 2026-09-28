@@ -48,7 +48,7 @@ test('migrates a legacy bot database without losing existing data', (t) => {
   assert.deepEqual(store.listUserTags('guild', 'alice').map((tag) => tag.tag_slug), ['art', 'games']);
   assert.equal(store.getTheme('guild', 'alice').title, 'Original');
   assert.deepEqual(store.getBoundaries('guild', 'alice').data, { no: 'spam' });
-  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 6);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 11);
   assert.equal(fs.readdirSync(path.join(directory, 'backups')).length, 1);
 });
 
@@ -107,4 +107,43 @@ test('tracks consented connection requests, blocks, and deletion', (t) => {
   assert.equal(store.getProfile('guild', 'bob'), null);
   assert.equal(store.stats('guild').connection_requests, 0);
   assert.deepEqual(store.integrityCheck(), [{ integrity_check: 'ok' }]);
+});
+
+test('persists gathering plans and idempotent invited-member RSVPs across a restart', (t) => {
+  const { directory, databasePath } = temporaryDatabase();
+  let store = createStore({ databasePath });
+  const plan = store.createGatherPlan({
+    guildId: 'guild', senderId: 'host', recipientIds: ['one', 'two'], interestSlugs: ['board-games'],
+    activity: 'Try a co-op game', startsAt: 'Friday at 8', channelId: 'channel', messageId: 'message',
+  });
+  assert.throws(() => store.setGatherConversation(plan.id, { threadId: 'thread' }), /At least one/);
+  store.recordGatherRsvp(plan.id, 'one', 'maybe');
+  const updated = store.recordGatherRsvp(plan.id, 'one', 'yes');
+  assert.deepEqual(updated.counts, { yes: 1, maybe: 0, no: 0 });
+  assert.throws(() => store.recordGatherRsvp(plan.id, 'outside', 'yes'), /Only invited/);
+  store.close();
+
+  store = createStore({ databasePath });
+  cleanupStore(t, directory, store);
+  const restored = store.getGatherPlan(plan.id);
+  assert.deepEqual(restored.interest_slugs, ['board-games']);
+  assert.deepEqual(restored.recipient_ids, ['one', 'two']);
+  assert.deepEqual(store.listGatherRsvps(plan.id).map((rsvp) => [rsvp.user_id, rsvp.response]), [['one', 'yes']]);
+  const opened = store.setGatherConversation(plan.id, { threadId: 'thread' });
+  assert.equal(opened.status, 'open');
+  assert.equal(opened.thread_id, 'thread');
+  assert.equal(store.setGatherConversation(plan.id, { threadId: 'thread' }).id, plan.id);
+  assert.throws(() => store.recordGatherRsvp(plan.id, 'two', 'yes'), /no longer taking/);
+});
+
+test('expires pending gathering plans before accepting an RSVP', (t) => {
+  const { directory, databasePath } = temporaryDatabase();
+  const store = createStore({ databasePath }); cleanupStore(t, directory, store);
+  const plan = store.createGatherPlan({
+    guildId: 'guild', senderId: 'host', recipientIds: ['one'], interestSlugs: ['games'],
+    channelId: 'channel', messageId: 'message', expiresAt: '2020-01-01T00:00:00.000Z',
+  });
+  assert.equal(store.getGatherPlan(plan.id).status, 'expired');
+  assert.throws(() => store.recordGatherRsvp(plan.id, 'one', 'yes'), /no longer taking/);
+  assert.equal(store.listGatherRsvps(plan.id).length, 0);
 });
